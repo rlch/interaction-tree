@@ -23,10 +23,32 @@ base class InteractionTreeMCPServer extends MCPServer with ToolsSupport {
           instructions: '''
 An MCP server for interacting with Flutter apps via the interaction_tree package.
 
-First, connect to a running Flutter app using the `connect` tool with the VM service URI.
-Then use `get_tree` to see available interaction targets, and action tools (tap, enterText, etc.) to perform interactions.
+## Workflow
+1. Connect to a running Flutter app using `connect` with the VM service URI (from flutter run output)
+2. Use `get_tree` to discover available interaction targets
+3. Use action tools to interact with the app
 
-The Flutter app must have InteractionService.register() called and widgets marked with InteractionKey.
+## Available Tools
+
+### Discovery
+- `get_tree` - Get all interactable widgets (id, description, capabilities). Options: includeBounds, includeWidgetType, includeState
+- `get_state` - Get current state of a specific widget (text value, enabled, visible)
+
+### Actions
+- `tap`, `doubleTap`, `longPress` - Gesture interactions
+- `enterText`, `clearText` - Text input
+- `drag`, `scroll` - Movement interactions  
+- `scrollIntoView` - Auto-scroll to make a widget visible
+- `executeAction` - Execute a custom action defined via InteractableMixin
+
+### Synchronization
+- `waitFor` - Wait for a widget to exist/not exist/be visible/not visible (useful for async content)
+- `batch` - Execute multiple actions in sequence as a single operation
+
+## Requirements
+The Flutter app must have:
+- `InteractionService.register()` called in main()
+- Widgets marked with `InteractionKey('id', description: '...')`
 ''',
         ) {
     registerTool(_connectTool, _handleConnect);
@@ -43,6 +65,7 @@ The Flutter app must have InteractionService.register() called and widgets marke
     registerTool(_scrollIntoViewTool, _handleScrollIntoView);
     registerTool(_waitForTool, _handleWaitFor);
     registerTool(_batchTool, _handleBatch);
+    registerTool(_executeActionTool, _handleExecuteAction);
   }
 
   VmService? _vmService;
@@ -238,7 +261,7 @@ The Flutter app must have InteractionService.register() called and widgets marke
             properties: {
               'action': Schema.string(
                 description:
-                    'The action: tap, doubleTap, longPress, enterText, clearText, drag, scroll, scrollIntoView, waitFor',
+                    'The action: tap, doubleTap, longPress, enterText, clearText, drag, scroll, scrollIntoView, waitFor, executeAction',
               ),
               'id': Schema.string(description: 'The InteractionKey id'),
               'text': Schema.string(description: 'Text for enterText'),
@@ -247,12 +270,35 @@ The Flutter app must have InteractionService.register() called and widgets marke
               'alignment': Schema.num(description: 'Alignment for scrollIntoView'),
               'condition': Schema.string(description: 'Condition for waitFor'),
               'timeoutMs': Schema.int(description: 'Timeout for waitFor'),
+              'actionName': Schema.string(description: 'Action name for executeAction'),
+              'args': Schema.object(
+                description: 'Arguments for executeAction',
+                properties: {},
+              ),
             },
             required: ['action'],
           ),
         ),
       },
       required: ['steps'],
+    ),
+  );
+
+  final _executeActionTool = Tool(
+    name: 'executeAction',
+    description:
+        'Execute a custom action defined on a widget via InteractableMixin. '
+        'Actions are shown in the get_tree output under the "actions" field.',
+    inputSchema: Schema.object(
+      properties: {
+        'id': Schema.string(description: 'The InteractionKey id of the target'),
+        'actionName': Schema.string(description: 'The name of the action to execute'),
+        'args': Schema.object(
+          description: 'Arguments to pass to the action (as defined in the action\'s parameters)',
+          properties: {},
+        ),
+      },
+      required: ['id', 'actionName'],
     ),
   );
 
@@ -437,6 +483,53 @@ The Flutter app must have InteractionService.register() called and widgets marke
       );
     } catch (e) {
       return _error('Failed to execute batch: $e');
+    }
+  }
+
+  FutureOr<CallToolResult> _handleExecuteAction(CallToolRequest request) async {
+    if (!isConnected) {
+      return _error('Not connected. Use the connect tool first.');
+    }
+
+    try {
+      final id = request.arguments!['id'] as String;
+      final actionName = request.arguments!['actionName'] as String;
+      final args = request.arguments!['args'] as Map<String, Object?>?;
+
+      final extensionArgs = <String, String>{
+        'id': id,
+        'actionName': actionName,
+      };
+      if (args != null && args.isNotEmpty) {
+        extensionArgs['args'] = jsonEncode(args);
+      }
+
+      final response = await _vmService!.callServiceExtension(
+        'ext.interaction_tree.executeAction',
+        isolateId: _isolateId,
+        args: extensionArgs,
+      );
+
+      final json = response.json;
+      if (json == null) {
+        return _error('No response from extension');
+      }
+
+      final success = json['success'] as bool? ?? false;
+      if (!success) {
+        final error = json['error'] as String? ?? 'Unknown error';
+        return _error('Action failed: $error');
+      }
+
+      return CallToolResult(
+        content: [
+          TextContent(
+            text: const JsonEncoder.withIndent('  ').convert(json),
+          ),
+        ],
+      );
+    } catch (e) {
+      return _error('Failed to execute action: $e');
     }
   }
 
