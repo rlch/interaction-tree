@@ -32,12 +32,17 @@ The Flutter app must have InteractionService.register() called and widgets marke
     registerTool(_connectTool, _handleConnect);
     registerTool(_disconnectTool, _handleDisconnect);
     registerTool(_getTreeTool, _handleGetTree);
+    registerTool(_getStateTool, _handleGetState);
     registerTool(_tapTool, _handleTap);
     registerTool(_doubleTapTool, _handleDoubleTap);
     registerTool(_longPressTool, _handleLongPress);
     registerTool(_enterTextTool, _handleEnterText);
+    registerTool(_clearTextTool, _handleClearText);
     registerTool(_dragTool, _handleDrag);
     registerTool(_scrollTool, _handleScroll);
+    registerTool(_scrollIntoViewTool, _handleScrollIntoView);
+    registerTool(_waitForTool, _handleWaitFor);
+    registerTool(_batchTool, _handleBatch);
   }
 
   VmService? _vmService;
@@ -74,7 +79,7 @@ The Flutter app must have InteractionService.register() called and widgets marke
     description:
         'Get all InteractionKey-marked widgets from the connected Flutter app. '
         'Returns a tree of targets with id, description, and capabilities. '
-        'Use includeBounds/includeWidgetType for additional info.',
+        'Use includeBounds/includeWidgetType/includeState for additional info.',
     inputSchema: Schema.object(
       properties: {
         'includeBounds': Schema.bool(
@@ -83,7 +88,23 @@ The Flutter app must have InteractionService.register() called and widgets marke
         'includeWidgetType': Schema.bool(
           description: 'Include the Flutter widget type name',
         ),
+        'includeState': Schema.bool(
+          description: 'Include current state (text value, enabled, visible) for each target',
+        ),
       },
+    ),
+  );
+
+  final _getStateTool = Tool(
+    name: 'get_state',
+    description:
+        'Get the current state of a widget. Returns text content for text fields, '
+        'enabled/disabled status, and visibility.',
+    inputSchema: Schema.object(
+      properties: {
+        'id': Schema.string(description: 'The InteractionKey id of the target'),
+      },
+      required: ['id'],
     ),
   );
 
@@ -132,6 +153,17 @@ The Flutter app must have InteractionService.register() called and widgets marke
     ),
   );
 
+  final _clearTextTool = Tool(
+    name: 'clearText',
+    description: 'Clear text from a text field by its InteractionKey id.',
+    inputSchema: Schema.object(
+      properties: {
+        'id': Schema.string(description: 'The InteractionKey id of the target'),
+      },
+      required: ['id'],
+    ),
+  );
+
   final _dragTool = Tool(
     name: 'drag',
     description: 'Drag a widget by its InteractionKey id.',
@@ -155,6 +187,72 @@ The Flutter app must have InteractionService.register() called and widgets marke
         'dy': Schema.string(description: 'Vertical scroll delta'),
       },
       required: ['id'],
+    ),
+  );
+
+  final _scrollIntoViewTool = Tool(
+    name: 'scrollIntoView',
+    description:
+        'Scroll to make a widget visible. Automatically finds the nearest scrollable ancestor and scrolls until the target is in view.',
+    inputSchema: Schema.object(
+      properties: {
+        'id': Schema.string(description: 'The InteractionKey id of the target'),
+        'alignment': Schema.string(
+          description:
+              'Where to position the widget: 0.0 = top/start, 0.5 = center, 1.0 = bottom/end. Default: 0.0',
+        ),
+      },
+      required: ['id'],
+    ),
+  );
+
+  final _waitForTool = Tool(
+    name: 'waitFor',
+    description:
+        'Wait for a widget to reach a certain state. Useful for waiting for async content to load.',
+    inputSchema: Schema.object(
+      properties: {
+        'id': Schema.string(description: 'The InteractionKey id of the target'),
+        'condition': Schema.string(
+          description:
+              'The condition to wait for: exists (default), notExists, visible, notVisible',
+        ),
+        'timeoutMs': Schema.int(
+          description: 'Timeout in milliseconds. Default: 10000',
+        ),
+      },
+      required: ['id'],
+    ),
+  );
+
+  final _batchTool = Tool(
+    name: 'batch',
+    description:
+        'Execute multiple interactions in sequence as a single operation. '
+        'Useful for reducing round-trips when performing a series of actions.',
+    inputSchema: Schema.object(
+      properties: {
+        'steps': Schema.list(
+          description: 'Array of step objects, each with "action" and action-specific params',
+          items: Schema.object(
+            properties: {
+              'action': Schema.string(
+                description:
+                    'The action: tap, doubleTap, longPress, enterText, clearText, drag, scroll, scrollIntoView, waitFor',
+              ),
+              'id': Schema.string(description: 'The InteractionKey id'),
+              'text': Schema.string(description: 'Text for enterText'),
+              'dx': Schema.num(description: 'X offset for drag/scroll'),
+              'dy': Schema.num(description: 'Y offset for drag/scroll'),
+              'alignment': Schema.num(description: 'Alignment for scrollIntoView'),
+              'condition': Schema.string(description: 'Condition for waitFor'),
+              'timeoutMs': Schema.int(description: 'Timeout for waitFor'),
+            },
+            required: ['action'],
+          ),
+        ),
+      },
+      required: ['steps'],
     ),
   );
 
@@ -210,6 +308,9 @@ The Flutter app must have InteractionService.register() called and widgets marke
         if (arguments['includeWidgetType'] == true) {
           args['includeWidgetType'] = 'true';
         }
+        if (arguments['includeState'] == true) {
+          args['includeState'] = 'true';
+        }
       }
 
       final response = await _vmService!.callServiceExtension(
@@ -235,6 +336,36 @@ The Flutter app must have InteractionService.register() called and widgets marke
     }
   }
 
+  FutureOr<CallToolResult> _handleGetState(CallToolRequest request) async {
+    if (!isConnected) {
+      return _error('Not connected. Use the connect tool first.');
+    }
+
+    try {
+      final id = request.arguments!['id'] as String;
+      final response = await _vmService!.callServiceExtension(
+        'ext.interaction_tree.getState',
+        isolateId: _isolateId,
+        args: {'id': id},
+      );
+
+      final json = response.json;
+      if (json == null) {
+        return _error('No response from extension');
+      }
+
+      return CallToolResult(
+        content: [
+          TextContent(
+            text: const JsonEncoder.withIndent('  ').convert(json),
+          ),
+        ],
+      );
+    } catch (e) {
+      return _error('Failed to get state: $e');
+    }
+  }
+
   FutureOr<CallToolResult> _handleTap(CallToolRequest request) async {
     return _callAction('tap', request.arguments!);
   }
@@ -251,12 +382,62 @@ The Flutter app must have InteractionService.register() called and widgets marke
     return _callAction('enterText', request.arguments!);
   }
 
+  FutureOr<CallToolResult> _handleClearText(CallToolRequest request) async {
+    return _callAction('clearText', request.arguments!);
+  }
+
   FutureOr<CallToolResult> _handleDrag(CallToolRequest request) async {
     return _callAction('drag', request.arguments!);
   }
 
   FutureOr<CallToolResult> _handleScroll(CallToolRequest request) async {
     return _callAction('scroll', request.arguments!);
+  }
+
+  FutureOr<CallToolResult> _handleScrollIntoView(CallToolRequest request) async {
+    return _callAction('scrollIntoView', request.arguments!);
+  }
+
+  FutureOr<CallToolResult> _handleWaitFor(CallToolRequest request) async {
+    return _callAction('waitFor', request.arguments!);
+  }
+
+  FutureOr<CallToolResult> _handleBatch(CallToolRequest request) async {
+    if (!isConnected) {
+      return _error('Not connected. Use the connect tool first.');
+    }
+
+    try {
+      final steps = request.arguments!['steps'] as List;
+      final stepsJson = jsonEncode(steps);
+
+      final response = await _vmService!.callServiceExtension(
+        'ext.interaction_tree.batch',
+        isolateId: _isolateId,
+        args: {'steps': stepsJson},
+      );
+
+      final json = response.json;
+      if (json == null) {
+        return _error('No response from extension');
+      }
+
+      final success = json['success'] as bool? ?? false;
+      if (!success) {
+        final error = json['error'] as String? ?? 'Unknown error';
+        return _error('Batch failed: $error');
+      }
+
+      return CallToolResult(
+        content: [
+          TextContent(
+            text: const JsonEncoder.withIndent('  ').convert(json),
+          ),
+        ],
+      );
+    } catch (e) {
+      return _error('Failed to execute batch: $e');
+    }
   }
 
   Future<CallToolResult> _callAction(

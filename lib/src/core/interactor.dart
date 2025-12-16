@@ -2,11 +2,18 @@ import 'dart:async';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/widgets.dart';
+import 'package:flutter/widgets.dart' hide Notification;
 
 import 'interaction_finder.dart';
 import 'interaction_result.dart';
 import 'interaction_target.dart';
+
+enum WaitCondition {
+  exists,
+  notExists,
+  visible,
+  notVisible,
+}
 
 class Interactor {
   Interactor._();
@@ -20,6 +27,7 @@ class Interactor {
   Map<String, Object?> getTree({
     bool includeBounds = false,
     bool includeWidgetType = false,
+    bool includeState = false,
   }) {
     final tree = find.tree();
     return {
@@ -27,8 +35,30 @@ class Interactor {
           .map((t) => t.toJson(
                 includeBounds: includeBounds,
                 includeWidgetType: includeWidgetType,
+                includeState: includeState,
+                stateProvider: includeState ? _getStateForId : null,
               ))
           .toList(),
+    };
+  }
+
+  Map<String, Object?> _getStateForId(String id) {
+    final target = find.byId(id);
+    return target?.getState() ?? {};
+  }
+
+  Map<String, Object?> getState(String id) {
+    final target = find.byId(id);
+    if (target == null) {
+      return {
+        'success': false,
+        'error': 'Target "$id" not found',
+      };
+    }
+    return {
+      'success': true,
+      'id': id,
+      'state': target.getState(),
     };
   }
 
@@ -94,6 +124,264 @@ class Interactor {
       settle: settle,
       action: (target) => scrollAt(target.center, delta),
     );
+  }
+
+  Future<InteractionResult> clearText(String id, {bool settle = false}) async {
+    return _perform(
+      id,
+      settle: settle,
+      action: (target) async {
+        await tapAt(target.center);
+        await _pumpFrame();
+        await _sendClearTextAction();
+      },
+    );
+  }
+
+  Future<InteractionResult> executeAction(
+    String id,
+    String actionName, {
+    Map<String, dynamic> args = const {},
+    bool settle = false,
+  }) async {
+    final stopwatch = Stopwatch()..start();
+    try {
+      final target = find.byId(id);
+      if (target == null) {
+        return InteractionFailure(
+          durationMs: stopwatch.elapsedMilliseconds,
+          error: 'Target "$id" not found',
+        );
+      }
+
+      final action = target.findAction(actionName);
+      if (action == null) {
+        return InteractionFailure(
+          durationMs: stopwatch.elapsedMilliseconds,
+          error: 'Action "$actionName" not found on target "$id"',
+        );
+      }
+
+      await action.execute(args);
+
+      if (settle) {
+        await _settle();
+      }
+
+      return InteractionSuccess(
+        durationMs: stopwatch.elapsedMilliseconds,
+        tree: getTree(),
+      );
+    } catch (e, st) {
+      return InteractionFailure(
+        durationMs: stopwatch.elapsedMilliseconds,
+        error: e.toString(),
+        stackTrace: st.toString(),
+      );
+    }
+  }
+
+  Future<InteractionResult> waitFor(
+    String id, {
+    WaitCondition condition = WaitCondition.exists,
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    final stopwatch = Stopwatch()..start();
+    final deadline = DateTime.now().add(timeout);
+
+    while (DateTime.now().isBefore(deadline)) {
+      final target = find.byId(id);
+      final conditionMet = switch (condition) {
+        WaitCondition.exists => target != null,
+        WaitCondition.notExists => target == null,
+        WaitCondition.visible => target != null && target.isVisible,
+        WaitCondition.notVisible => target == null || !target.isVisible,
+      };
+
+      if (conditionMet) {
+        return InteractionSuccess(
+          durationMs: stopwatch.elapsedMilliseconds,
+          tree: getTree(),
+        );
+      }
+
+      // Wait for next frame before checking again
+      await _pumpFrame();
+    }
+
+    return InteractionFailure(
+      durationMs: stopwatch.elapsedMilliseconds,
+      error: 'Timeout waiting for "$id" to be ${condition.name}',
+    );
+  }
+
+  Future<InteractionResult> batch(
+    List<Map<String, Object?>> steps, {
+    bool settle = false,
+  }) async {
+    final stopwatch = Stopwatch()..start();
+    final results = <Map<String, Object?>>[];
+
+    for (var i = 0; i < steps.length; i++) {
+      final step = steps[i];
+      final action = step['action'] as String?;
+      final id = step['id'] as String?;
+
+      if (action == null) {
+        return InteractionFailure(
+          durationMs: stopwatch.elapsedMilliseconds,
+          error: 'Step $i: missing "action" field',
+        );
+      }
+
+      InteractionResult result;
+      try {
+        result = await _executeStep(action, step);
+      } catch (e, st) {
+        return InteractionFailure(
+          durationMs: stopwatch.elapsedMilliseconds,
+          error: 'Step $i ($action): $e',
+          stackTrace: st.toString(),
+        );
+      }
+
+      results.add({
+        'step': i,
+        'action': action,
+        if (id != null) 'id': id,
+        'success': result is InteractionSuccess,
+        'durationMs': result.durationMs,
+        if (result is InteractionFailure) 'error': result.error,
+      });
+
+      if (result is InteractionFailure) {
+        return InteractionFailure(
+          durationMs: stopwatch.elapsedMilliseconds,
+          error: 'Step $i ($action) failed: ${result.error}',
+          stackTrace: result.stackTrace,
+        );
+      }
+    }
+
+    if (settle) {
+      await _settle();
+    }
+
+    return InteractionSuccess(
+      durationMs: stopwatch.elapsedMilliseconds,
+      tree: getTree(),
+      data: {'steps': results},
+    );
+  }
+
+  Future<InteractionResult> _executeStep(
+    String action,
+    Map<String, Object?> step,
+  ) async {
+    final id = step['id'] as String?;
+
+    return switch (action) {
+      'tap' => tap(id!, settle: false),
+      'doubleTap' => doubleTap(id!, settle: false),
+      'longPress' => longPress(id!, settle: false),
+      'enterText' => enterText(id!, step['text'] as String, settle: false),
+      'clearText' => clearText(id!, settle: false),
+      'drag' => drag(
+          id!,
+          Offset(
+            (step['dx'] as num?)?.toDouble() ?? 0.0,
+            (step['dy'] as num?)?.toDouble() ?? 0.0,
+          ),
+          settle: false,
+        ),
+      'scroll' => scroll(
+          id!,
+          Offset(
+            (step['dx'] as num?)?.toDouble() ?? 0.0,
+            (step['dy'] as num?)?.toDouble() ?? 0.0,
+          ),
+          settle: false,
+        ),
+      'scrollIntoView' => scrollIntoView(
+          id!,
+          alignment: (step['alignment'] as num?)?.toDouble() ?? 0.0,
+          settle: false,
+        ),
+      'waitFor' => waitFor(
+          id!,
+          condition: _parseWaitCondition(step['condition'] as String?),
+          timeout: Duration(
+            milliseconds: (step['timeoutMs'] as num?)?.toInt() ?? 10000,
+          ),
+        ),
+      'executeAction' => executeAction(
+          id!,
+          step['actionName'] as String,
+          args: (step['args'] as Map<String, dynamic>?) ?? const {},
+          settle: false,
+        ),
+      _ => throw ArgumentError('Unknown action: $action'),
+    };
+  }
+
+  WaitCondition _parseWaitCondition(String? condition) {
+    return switch (condition) {
+      'exists' => WaitCondition.exists,
+      'notExists' => WaitCondition.notExists,
+      'visible' => WaitCondition.visible,
+      'notVisible' => WaitCondition.notVisible,
+      _ => WaitCondition.exists,
+    };
+  }
+
+  Future<InteractionResult> scrollIntoView(
+    String id, {
+    double alignment = 0.0,
+    bool settle = false,
+  }) async {
+    final stopwatch = Stopwatch()..start();
+    try {
+      final target = find.byId(id);
+      if (target == null) {
+        return InteractionFailure(
+          durationMs: stopwatch.elapsedMilliseconds,
+          error: 'Target "$id" not found',
+        );
+      }
+
+      final renderObject = target.element.renderObject;
+      if (renderObject == null) {
+        return InteractionFailure(
+          durationMs: stopwatch.elapsedMilliseconds,
+          error: 'Target "$id" has no render object',
+        );
+      }
+
+      // Use Scrollable.ensureVisible to scroll the target into view
+      // We need a BuildContext, so we use the element itself
+      await Scrollable.ensureVisible(
+        target.element,
+        alignment: alignment,
+        duration: const Duration(milliseconds: 300),
+      );
+
+      if (settle) {
+        await _settle();
+      } else {
+        await _pumpFrame();
+      }
+
+      return InteractionSuccess(
+        durationMs: stopwatch.elapsedMilliseconds,
+        tree: getTree(),
+      );
+    } catch (e, st) {
+      return InteractionFailure(
+        durationMs: stopwatch.elapsedMilliseconds,
+        error: e.toString(),
+        stackTrace: st.toString(),
+      );
+    }
   }
 
   Future<InteractionResult> _perform(
@@ -265,6 +553,30 @@ class Interactor {
     ServicesBinding.instance.channelBuffers.push(
       'flutter/textinput',
       setEditingStateMessage,
+      (ByteData? data) {},
+    );
+    await _pumpFrame();
+  }
+
+  Future<void> _sendClearTextAction() async {
+    final clearMessage = const JSONMethodCodec().encodeMethodCall(
+      MethodCall('TextInputClient.updateEditingState', <dynamic>[
+        -1,
+        <String, dynamic>{
+          'text': '',
+          'selectionBase': 0,
+          'selectionExtent': 0,
+          'selectionAffinity': 'TextAffinity.downstream',
+          'selectionIsDirectional': false,
+          'composingBase': -1,
+          'composingExtent': -1,
+        },
+      ]),
+    );
+
+    ServicesBinding.instance.channelBuffers.push(
+      'flutter/textinput',
+      clearMessage,
       (ByteData? data) {},
     );
     await _pumpFrame();

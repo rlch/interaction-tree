@@ -6,6 +6,7 @@ enum InteractionCapability {
   doubleTap,
   longPress,
   enterText,
+  clearText,
   drag,
   scroll,
   toggle,
@@ -35,6 +36,7 @@ void _visitRenderTree(Element element, Set<InteractionCapability> caps) {
   // Text input
   if (renderObject is RenderEditable) {
     caps.add(InteractionCapability.enterText);
+    caps.add(InteractionCapability.clearText);
     caps.add(InteractionCapability.focus);
   }
 

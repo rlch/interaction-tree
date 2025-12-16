@@ -1,5 +1,7 @@
 import 'package:flutter/widgets.dart';
 
+import 'interactable_mixin.dart';
+import 'interaction_action.dart';
 import 'interaction_capability.dart';
 import 'interaction_context.dart';
 import 'interaction_key.dart';
@@ -51,13 +53,25 @@ class InteractionFinder {
     final key = element.widget.key;
     if (key is InteractionKey) {
       final capabilities = key.capabilities ?? inferCapabilities(element);
+      final actions = _findActionsForElement(element, key.id);
       targets.add(InteractionTarget(
         key: key,
         element: element,
         capabilities: capabilities,
+        actions: actions,
       ));
     }
     element.visitChildren((child) => _collectTargets(child, targets));
+  }
+
+  List<InteractionAction> _findActionsForElement(Element element, String id) {
+    if (element is StatefulElement) {
+      final state = element.state;
+      if (state is InteractableMixin && state.interactionId == id) {
+        return state.actions;
+      }
+    }
+    return const [];
   }
 
   /// Returns the interaction tree with proper hierarchy.
@@ -92,6 +106,7 @@ class InteractionFinder {
     if (key is InteractionKey) {
       // Interactive node - wrap children
       final capabilities = key.capabilities ?? inferCapabilities(element);
+      final actions = _findActionsForElement(element, key.id);
       final renderBox = _getRenderBox(element);
 
       return [
@@ -99,6 +114,7 @@ class InteractionFinder {
           id: key.id,
           description: key.description,
           capabilities: capabilities,
+          actions: actions,
           widgetType: widget.runtimeType.toString(),
           bounds: renderBox != null ? _toBounds(renderBox) : null,
           children: childNodes,
