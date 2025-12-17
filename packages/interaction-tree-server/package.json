@@ -1,0 +1,46 @@
+{
+  "name": "interaction-tree-server",
+  "version": "0.1.0",
+  "description": "MCP server for Flutter interaction tree with optional AI agent mode",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "interaction-tree-server": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "start:raw": "INTERACTION_TREE_MODE=raw node dist/index.js",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.1.70",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "ws": "^8.18.0",
+    "uuid": "^10.0.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0",
+    "@types/uuid": "^10.0.0",
+    "typescript": "^5.6.0",
+    "eslint": "^9.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "mcp",
+    "flutter",
+    "interaction-tree",
+    "testing",
+    "automation",
+    "ai-agent"
+  ],
+  "license": "MIT"
+}
