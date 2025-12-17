@@ -234,6 +234,18 @@ export class DaemonServer {
                     sendResponse({ success: true, data: { tree } });
                     break;
                 }
+                case 'get_logs': {
+                    const clientEntry = this.clients.get(clientId);
+                    const sessionId = clientEntry?.client.currentSessionId;
+                    if (!sessionId) {
+                        sendResponse({ success: false, error: 'No session connected' });
+                        return;
+                    }
+                    const options = data;
+                    const logs = this.flutterManager.getLogs(sessionId, options?.maxLines);
+                    sendResponse({ success: true, data: { logs } });
+                    break;
+                }
                 case 'execute_interaction':
                     sendResponse({ success: false, error: `${action} not yet implemented` });
                     break;

@@ -11,6 +11,7 @@ import {
 import { DaemonClient } from './daemon-client.js';
 
 const TOOLS = [
+  // Session management
   {
     name: 'create_session',
     description: 'Create a new Flutter session',
@@ -50,6 +51,8 @@ const TOOLS = [
       required: ['sessionId'],
     },
   },
+
+  // App lifecycle
   {
     name: 'run_app',
     description: 'Run Flutter app in current session',
@@ -77,6 +80,8 @@ const TOOLS = [
     description: 'Hot restart the running app',
     inputSchema: { type: 'object' as const, properties: {} },
   },
+
+  // Interaction tree
   {
     name: 'get_tree',
     description: 'Get interaction tree from running app',
@@ -98,6 +103,18 @@ const TOOLS = [
         args: { type: 'object', description: 'Interaction arguments' },
       },
       required: ['nodeId', 'interaction'],
+    },
+  },
+
+  // Logs & Status
+  {
+    name: 'get_logs',
+    description: 'Get Flutter app logs from current session',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        maxLines: { type: 'number', description: 'Maximum number of log lines to return (default: 100)' },
+      },
     },
   },
   {

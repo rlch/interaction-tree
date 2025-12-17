@@ -3,7 +3,6 @@ mod completion_popup;
 mod flutter_pane;
 mod help_bar;
 mod help_overlay;
-mod input_bar;
 mod session_logs_pane;
 mod session_picker;
 mod status_bar;
@@ -25,7 +24,6 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         .constraints([
             Constraint::Length(1), // status bar
             Constraint::Min(3),    // main content area
-            Constraint::Length(3), // input bar
             Constraint::Length(1), // help bar
         ])
         .split(frame.area());
@@ -50,11 +48,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         render_content_with_tabs(frame, app, chunks[1]);
     }
 
-    input_bar::render(frame, app, chunks[2]);
-    help_bar::render(frame, app, chunks[3]);
-
-    // Completion popup (above input bar)
-    completion_popup::render(frame, app, chunks[2]);
+    help_bar::render(frame, app, chunks[2]);
 
     // Overlays
     if matches!(app.mode, Mode::Help) {

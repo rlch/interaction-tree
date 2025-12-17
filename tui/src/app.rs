@@ -1,6 +1,5 @@
 use std::collections::VecDeque;
 
-use tui_textarea::TextArea;
 use tui_tree_widget::TreeState;
 
 use crate::project::ProjectInfo;
@@ -45,7 +44,6 @@ pub enum AppStatus {
 pub enum Mode {
     Normal,
     Filter,
-    Input,
     Help,
     Confirm(ConfirmAction),
     SessionPicker,
@@ -69,7 +67,6 @@ pub enum ConfirmAction {
 pub enum Pane {
     Content,
     Tree,
-    Input,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -109,7 +106,7 @@ impl ContentTab {
     }
 }
 
-pub struct App<'a> {
+pub struct App {
     pub ws_state: WsState,
     pub server_uri: String,
 
@@ -130,7 +127,6 @@ pub struct App<'a> {
 
     pub mode: Mode,
     pub input_buffer: String,
-    pub textarea: TextArea<'a>,
     pub filter: Option<String>,
     pub selected_pane: Pane,
     pub content_tab: ContentTab,
@@ -218,12 +214,8 @@ impl Toast {
     }
 }
 
-impl<'a> App<'a> {
+impl App {
     pub fn new(uri: String, max_events: usize, project: ProjectInfo) -> Self {
-        let mut textarea = TextArea::default();
-        textarea.set_cursor_line_style(ratatui::style::Style::default());
-        textarea.set_placeholder_text("Type an intent or command...");
-
         Self {
             ws_state: WsState::Disconnected,
             server_uri: uri,
@@ -242,7 +234,6 @@ impl<'a> App<'a> {
 
             mode: Mode::SessionPicker,
             input_buffer: String::new(),
-            textarea,
             filter: None,
             selected_pane: Pane::Content,
             content_tab: ContentTab::default(),

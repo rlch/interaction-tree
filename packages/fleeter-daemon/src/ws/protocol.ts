@@ -41,15 +41,17 @@ export type CommandAction =
   | 'list_sessions'
   | 'connect_session'
   | 'disconnect_session'
-  // App lifecycle (Phase 3)
+  // App lifecycle
   | 'run_app'
   | 'stop_app'
   | 'hot_reload'
   | 'hot_restart'
-  // Interaction tree (Phase 3)
+  // Interaction tree
   | 'get_tree'
   | 'execute_interaction'
-  // Agent (Phase 4)
+  // Logs
+  | 'get_logs'
+  // Agent
   | 'agent_message'
   // Status
   | 'get_status'

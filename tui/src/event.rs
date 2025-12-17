@@ -19,7 +19,7 @@ use crate::ui;
 use crate::ws::client::{WsClient, WsEvent};
 use crate::ws::protocol::{IncomingMessage, OutgoingMessage, SessionSummary};
 
-pub async fn run(app: &mut App<'_>) -> Result<()> {
+pub async fn run(app: &mut App) -> Result<()> {
     crossterm::terminal::enable_raw_mode()?;
     let mut stdout = io::stdout();
     crossterm::execute!(stdout, EnterAlternateScreen, crossterm::event::EnableMouseCapture)?;
@@ -40,7 +40,7 @@ pub async fn run(app: &mut App<'_>) -> Result<()> {
 
 async fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    app: &mut App<'_>,
+    app: &mut App,
 ) -> Result<()> {
     let (ws_tx, mut ws_rx) = mpsc::channel::<WsEvent>(100);
 
@@ -107,7 +107,7 @@ async fn run_event_loop(
 }
 
 async fn handle_key_event(
-    app: &mut App<'_>,
+    app: &mut App,
     key: KeyEvent,
     ws: &Option<WsClient>,
 ) -> Result<()> {
@@ -119,7 +119,6 @@ async fn handle_key_event(
     match &app.mode {
         Mode::Normal => handle_normal_mode(app, key, ws).await?,
         Mode::Filter => handle_filter_mode(app, key),
-        Mode::Input => handle_input_mode(app, key, ws).await?,
         Mode::Help => handle_help_mode(app, key),
         Mode::Confirm(action) => handle_confirm_mode(app, key, action.clone()),
         Mode::SessionPicker => handle_session_picker_mode(app, key, ws).await?,
@@ -129,17 +128,15 @@ async fn handle_key_event(
     Ok(())
 }
 
-fn handle_mouse_event(app: &mut App<'_>, mouse: MouseEvent) {
+fn handle_mouse_event(app: &mut App, mouse: MouseEvent) {
     match mouse.kind {
         MouseEventKind::ScrollUp => match app.selected_pane {
             Pane::Content => app.scroll_up(),
             Pane::Tree => app.tree_up(),
-            _ => {}
         },
         MouseEventKind::ScrollDown => match app.selected_pane {
             Pane::Content => app.scroll_down(),
             Pane::Tree => app.tree_down(),
-            _ => {}
         },
         MouseEventKind::Down(MouseButton::Left) => {
             // Future: implement pane focus detection based on coordinates
@@ -148,7 +145,7 @@ fn handle_mouse_event(app: &mut App<'_>, mouse: MouseEvent) {
     }
 }
 
-async fn handle_normal_mode(app: &mut App<'_>, key: KeyEvent, ws: &Option<WsClient>) -> Result<()> {
+async fn handle_normal_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>) -> Result<()> {
     match app.selected_pane {
         Pane::Tree => {
             match key.code {
@@ -168,7 +165,7 @@ async fn handle_normal_mode(app: &mut App<'_>, key: KeyEvent, ws: &Option<WsClie
                     app.tree_toggle();
                 }
                 KeyCode::Tab => {
-                    app.selected_pane = Pane::Input;
+                    app.selected_pane = Pane::Content;
                 }
                 KeyCode::Esc => {
                     app.selected_pane = Pane::Content;
@@ -176,29 +173,7 @@ async fn handle_normal_mode(app: &mut App<'_>, key: KeyEvent, ws: &Option<WsClie
                 _ => handle_global_keys(app, key, ws).await?,
             }
         }
-        Pane::Input => {
-            match key.code {
-                KeyCode::Char('/') => {
-                    app.mode = Mode::Filter;
-                    app.input_buffer.clear();
-                }
-                KeyCode::Char('?') => {
-                    app.mode = Mode::Help;
-                }
-                KeyCode::Tab => {
-                    app.selected_pane = Pane::Content;
-                }
-                KeyCode::Esc => {
-                    app.selected_pane = Pane::Content;
-                }
-                KeyCode::Char(c) => {
-                    app.mode = Mode::Input;
-                    app.input_buffer.clear();
-                    app.input_buffer.push(c);
-                }
-                _ => {}
-            }
-        }
+
         Pane::Content => {
             match key.code {
                 KeyCode::Char('q') => {
@@ -309,11 +284,9 @@ async fn handle_normal_mode(app: &mut App<'_>, key: KeyEvent, ws: &Option<WsClie
                     }
                 }
                 KeyCode::Tab => {
-                    app.selected_pane = if app.tree.is_some() {
-                        Pane::Tree
-                    } else {
-                        Pane::Input
-                    };
+                    if app.tree.is_some() {
+                        app.selected_pane = Pane::Tree;
+                    }
                 }
                 KeyCode::Esc => {
                     app.filter = None;
@@ -325,7 +298,7 @@ async fn handle_normal_mode(app: &mut App<'_>, key: KeyEvent, ws: &Option<WsClie
     Ok(())
 }
 
-async fn handle_global_keys(app: &mut App<'_>, key: KeyEvent, _ws: &Option<WsClient>) -> Result<()> {
+async fn handle_global_keys(app: &mut App, key: KeyEvent, _ws: &Option<WsClient>) -> Result<()> {
     match key.code {
         KeyCode::Char('q') => {
             app.mode = Mode::Confirm(ConfirmAction::Quit);
@@ -343,7 +316,7 @@ async fn handle_global_keys(app: &mut App<'_>, key: KeyEvent, _ws: &Option<WsCli
 
 // Command mode - currently unused, hotkey-driven UI instead
 /*
-async fn handle_command_mode(app: &mut App<'_>, key: KeyEvent, ws: &Option<WsClient>) -> Result<()> {
+async fn handle_command_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>) -> Result<()> {
     match key.code {
         KeyCode::Esc => {
             app.mode = Mode::Normal;
@@ -397,7 +370,7 @@ async fn handle_command_mode(app: &mut App<'_>, key: KeyEvent, ws: &Option<WsCli
 }
 */
 
-fn handle_filter_mode(app: &mut App<'_>, key: KeyEvent) {
+fn handle_filter_mode(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {
             app.mode = Mode::Normal;
@@ -423,58 +396,7 @@ fn handle_filter_mode(app: &mut App<'_>, key: KeyEvent) {
     }
 }
 
-async fn handle_input_mode(app: &mut App<'_>, key: KeyEvent, ws: &Option<WsClient>) -> Result<()> {
-    match key.code {
-        KeyCode::Esc => {
-            app.mode = Mode::Normal;
-            app.input_buffer.clear();
-            // Also cancel answer mode if we're in it
-            if app.in_answer_mode() {
-                app.cancel_answer_mode();
-            }
-        }
-        KeyCode::Enter => {
-            let input = app.input_buffer.clone();
-            app.input_buffer.clear();
-            app.mode = Mode::Normal;
-
-            if !input.is_empty() {
-                send_agent_message(app, ws, &input).await?;
-            }
-        }
-        KeyCode::Backspace => {
-            app.input_buffer.pop();
-            if app.input_buffer.is_empty() {
-                app.mode = Mode::Normal;
-            }
-        }
-        KeyCode::Char(c) => {
-            app.input_buffer.push(c);
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-async fn send_agent_message(app: &mut App<'_>, ws: &Option<WsClient>, intent: &str) -> Result<()> {
-    if let Some(client) = ws {
-        let is_answer = app.conversation_id.is_some();
-        let msg = OutgoingMessage::AgentMessage {
-            id: Uuid::new_v4().to_string(),
-            client_id: client.client_id().to_string(),
-            intent: if is_answer { String::new() } else { intent.to_string() },
-            answer: if is_answer { Some(intent.to_string()) } else { None },
-            conversation_id: app.conversation_id.clone(),
-        };
-        app.pending_intent = Some(intent.to_string());
-        app.pending_response = true;
-        app.last_agent_error = None;
-        let _ = client.send(msg).await;
-    }
-    Ok(())
-}
-
-fn handle_help_mode(app: &mut App<'_>, key: KeyEvent) {
+fn handle_help_mode(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
             app.mode = Mode::Normal;
@@ -483,7 +405,7 @@ fn handle_help_mode(app: &mut App<'_>, key: KeyEvent) {
     }
 }
 
-fn handle_confirm_mode(app: &mut App<'_>, key: KeyEvent, action: ConfirmAction) {
+fn handle_confirm_mode(app: &mut App, key: KeyEvent, action: ConfirmAction) {
     match key.code {
         KeyCode::Char('y') | KeyCode::Char('Y') => match action {
             ConfirmAction::Quit => {
@@ -498,7 +420,7 @@ fn handle_confirm_mode(app: &mut App<'_>, key: KeyEvent, action: ConfirmAction) 
 }
 
 async fn handle_session_picker_mode(
-    app: &mut App<'_>,
+    app: &mut App,
     key: KeyEvent,
     ws: &Option<WsClient>,
 ) -> Result<()> {
@@ -553,7 +475,7 @@ async fn handle_session_picker_mode(
 }
 
 async fn handle_input_prompt_mode(
-    app: &mut App<'_>,
+    app: &mut App,
     key: KeyEvent,
     ws: &Option<WsClient>,
     kind: InputPromptKind,
@@ -594,20 +516,23 @@ async fn handle_input_prompt_mode(
                 }
                 InputPromptKind::RunApp => {
                     if let Some(client) = ws {
-                        // Device is optional - empty string means default device
-                        let data = if input.is_empty() {
-                            None
+                        if let Some(ref session_id) = app.selected_session {
+                            // Device is optional - empty string means default device
+                            let mut data = serde_json::json!({ "sessionId": session_id });
+                            if !input.is_empty() {
+                                data["device"] = serde_json::json!(input);
+                            }
+                            let msg = OutgoingMessage::Command {
+                                id: Uuid::new_v4().to_string(),
+                                client_id: client.client_id().to_string(),
+                                action: "run_app".to_string(),
+                                key: None,
+                                data: Some(data),
+                            };
+                            let _ = client.send(msg).await;
                         } else {
-                            Some(serde_json::json!({ "device": input }))
-                        };
-                        let msg = OutgoingMessage::Command {
-                            id: Uuid::new_v4().to_string(),
-                            client_id: client.client_id().to_string(),
-                            action: "run_app".to_string(),
-                            key: None,
-                            data,
-                        };
-                        let _ = client.send(msg).await;
+                            app.push_toast(crate::app::Toast::error("No session selected"));
+                        }
                     }
                     app.mode = Mode::Normal;
                 }
@@ -635,7 +560,7 @@ fn current_event_count(app: &App) -> usize {
 
 // Keep execute_command for potential future use, but it's not used in hotkey-driven UI
 #[allow(dead_code)]
-async fn execute_command(app: &mut App<'_>, input: &str, ws: &Option<WsClient>) -> Result<()> {
+async fn execute_command(app: &mut App, input: &str, ws: &Option<WsClient>) -> Result<()> {
     let command = parse_command(input);
 
     match command {
@@ -797,7 +722,7 @@ async fn execute_command(app: &mut App<'_>, input: &str, ws: &Option<WsClient>) 
     Ok(())
 }
 
-fn handle_ws_event(app: &mut App<'_>, event: WsEvent) {
+fn handle_ws_event(app: &mut App, event: WsEvent) {
     match event {
         WsEvent::Connected {
             client_id: _,

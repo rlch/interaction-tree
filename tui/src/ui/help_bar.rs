@@ -11,13 +11,7 @@ use ratatui::{
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let t = theme();
 
-    // Check if we're in answer mode
-    let in_answer_mode = app.in_answer_mode() && matches!(app.mode, Mode::Normal | Mode::Input);
-
-    let bindings = if in_answer_mode {
-        vec![("Enter", "answer"), ("Esc", "cancel")]
-    } else {
-        match &app.mode {
+    let bindings = match &app.mode {
             Mode::Normal => {
                 match app.selected_pane {
                     Pane::Tree => vec![
@@ -50,7 +44,6 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
                 }
             }
             Mode::Filter => vec![("Enter", "apply"), ("Esc", "cancel")],
-            Mode::Input => vec![("Enter", "send"), ("Esc", "cancel")],
             Mode::Help => vec![("Esc", "close"), ("q", "quit")],
             Mode::Confirm(_) => vec![("y", "confirm"), ("n/Esc", "cancel")],
             Mode::SessionPicker => vec![
@@ -66,7 +59,6 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
                     InputPromptKind::RunApp => vec![("Enter", "run"), ("Esc", "cancel")],
                 }
             }
-        }
     };
 
     let mut spans = Vec::new();

@@ -21,7 +21,7 @@ export interface CommandMessage {
     action: CommandAction;
     data?: Record<string, unknown>;
 }
-export type CommandAction = 'create_session' | 'destroy_session' | 'list_sessions' | 'connect_session' | 'disconnect_session' | 'run_app' | 'stop_app' | 'hot_reload' | 'hot_restart' | 'get_tree' | 'execute_interaction' | 'agent_message' | 'get_status' | 'health_check';
+export type CommandAction = 'create_session' | 'destroy_session' | 'list_sessions' | 'connect_session' | 'disconnect_session' | 'run_app' | 'stop_app' | 'hot_reload' | 'hot_restart' | 'get_tree' | 'execute_interaction' | 'get_logs' | 'agent_message' | 'get_status' | 'health_check';
 export interface AgentToolCall {
     type: 'agent_tool_call';
     id: string;
