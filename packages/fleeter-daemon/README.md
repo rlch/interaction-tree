@@ -4,10 +4,11 @@ Central daemon for Flutter session management. Manages sessions, Flutter process
 
 ## Installation
 
+From the repository root:
+
 ```bash
-cd packages/fleeter-daemon
-npm install
-npm run build
+bun install
+bun run build
 ```
 
 ## Usage
@@ -15,36 +16,54 @@ npm run build
 ### Start the daemon
 
 ```bash
-# Foreground
-npx fleeter-daemon
+# From repo root - foreground
+bun run daemon:start
 
-# With custom port
-npx fleeter-daemon --port 9877
-
-# Or after global install
-fleeter-daemon
+# Or directly
+bun run --cwd packages/fleeter-daemon start
 ```
 
-### Auto-start on macOS
+### Auto-start on macOS (launchd)
 
 ```bash
-# Copy the launchd plist
-cp service/com.fleeter.daemon.plist ~/Library/LaunchAgents/
+# Install as a launchd service (generates plist dynamically)
+bun run daemon:install
 
-# Edit paths in the plist to match your installation
-# Then load it
-launchctl load ~/Library/LaunchAgents/com.fleeter.daemon.plist
+# Check status
+bun run daemon:status
+
+# View logs
+bun run daemon:logs
+
+# Uninstall
+bun run daemon:uninstall
+
+# Reinstall (after updates)
+bun run daemon:restart
 ```
 
 ### Auto-start on Linux (systemd)
 
 ```bash
-# Copy the service file
+# Create user service directory
 mkdir -p ~/.config/systemd/user
-cp service/fleeter-daemon.service ~/.config/systemd/user/
 
-# Edit paths in the service file
-# Then enable and start
+# Create service file
+cat > ~/.config/systemd/user/fleeter-daemon.service << EOF
+[Unit]
+Description=Fleeter Daemon
+After=network.target
+
+[Service]
+ExecStart=$(which bun) run $(pwd)/packages/fleeter-daemon/dist/bin/daemon.js
+Restart=always
+Environment=FLEETER_PORT=9877
+
+[Install]
+WantedBy=default.target
+EOF
+
+# Enable and start
 systemctl --user enable fleeter-daemon
 systemctl --user start fleeter-daemon
 ```

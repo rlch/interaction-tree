@@ -188,10 +188,8 @@ describe('Fleeter Daemon Integration Tests', () => {
 
   test('should run app (if Flutter is available)', async () => {
     // Skip if Flutter is not available
-    const { execSync } = await import('child_process');
-    try {
-      execSync('which flutter', { encoding: 'utf-8' });
-    } catch {
+    const flutterPath = Bun.which('flutter');
+    if (!flutterPath) {
       console.log('Flutter not in PATH, skipping run_app test');
       return;
     }

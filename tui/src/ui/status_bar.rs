@@ -12,19 +12,16 @@ use throbber_widgets_tui::ThrobberState;
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let t = theme();
 
-    let mut spans = vec![Span::styled(
-        " Fleeter",
-        Style::default().fg(t.title).add_modifier(Modifier::BOLD),
-    )];
-
     let sep = Span::styled(" │ ", Style::default().fg(t.text_dim));
 
-    // Project name
-    spans.push(sep.clone());
-    spans.push(Span::styled(
-        &app.project.name,
-        Style::default().fg(t.info),
-    ));
+    // Project name (first item now)
+    let mut spans = vec![
+        Span::raw(" "),
+        Span::styled(
+            &app.project.name,
+            Style::default().fg(t.info),
+        ),
+    ];
 
     // Selected session
     if let Some(ref session_id) = app.selected_session {

@@ -1,7 +1,8 @@
 {
   "name": "interaction-tree-server",
   "version": "0.1.0",
-  "description": "MCP server for Flutter interaction tree with optional AI agent mode",
+  "deprecated": "Use fleeter-daemon and fleeter-mcp-proxy instead. See DAEMON_DESIGN.md for migration guide.",
+  "description": "[DEPRECATED] MCP server for Flutter interaction tree - use fleeter-daemon instead",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
