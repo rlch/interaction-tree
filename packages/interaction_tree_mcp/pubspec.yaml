@@ -1,0 +1,14 @@
+name: interaction_tree_mcp
+description: MCP (Model Context Protocol) server for interaction_tree - enables AI assistants to interact with Flutter apps
+version: 0.1.0
+homepage: https://github.com/rlch/interaction-tree
+
+environment:
+  sdk: ^3.7.0
+
+dependencies:
+  dart_mcp: ^0.4.0
+  vm_service: ^15.0.0
+
+dev_dependencies:
+  lints: ^5.1.0

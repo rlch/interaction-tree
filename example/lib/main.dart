@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:interaction_tree/interaction_tree.dart';
 
 void main() {
-  WidgetsFlutterBinding.ensureInitialized();
-  InteractionService.register();
   runApp(const MyApp());
 }
 
@@ -42,19 +40,26 @@ class _HomePageState extends State<HomePage> {
         title: const Text('Interaction Tree Demo'),
         actions: [
           IconButton(
-            key: const InteractionKey('settings-btn', description: 'Open settings'),
+            key: const InteractionKey(
+              'settings-btn',
+              description: 'Open settings',
+            ),
             icon: const Icon(Icons.settings),
             onPressed: () => _openSettingsModal(context),
           ),
         ],
       ),
       body: ListView(
-        key: const InteractionKey('main-list', description: 'Main scrollable list'),
+        key: const InteractionKey(
+          'main-list',
+          description: 'Main scrollable list',
+        ),
         padding: const EdgeInsets.all(16),
         children: [
           // Counter card - wrapped in InteractionContext for hierarchy
           InteractionContext(
-            description: 'Counter section for incrementing/decrementing a value',
+            description:
+                'Counter section for incrementing/decrementing a value',
             child: Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -62,7 +67,10 @@ class _HomePageState extends State<HomePage> {
                   children: [
                     Text(
                       'Counter: $_counter',
-                      key: const InteractionKey('counter-display', description: 'Current counter value'),
+                      key: const InteractionKey(
+                        'counter-display',
+                        description: 'Current counter value',
+                      ),
                       style: Theme.of(context).textTheme.headlineMedium,
                     ),
                     const SizedBox(height: 16),
@@ -70,14 +78,20 @@ class _HomePageState extends State<HomePage> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         FilledButton.icon(
-                          key: const InteractionKey('decrement-btn', description: 'Decrease counter'),
+                          key: const InteractionKey(
+                            'decrement-btn',
+                            description: 'Decrease counter',
+                          ),
                           onPressed: () => setState(() => _counter--),
                           icon: const Icon(Icons.remove),
                           label: const Text('Decrease'),
                         ),
                         const SizedBox(width: 16),
                         FilledButton.icon(
-                          key: const InteractionKey('increment-btn', description: 'Increase counter'),
+                          key: const InteractionKey(
+                            'increment-btn',
+                            description: 'Increase counter',
+                          ),
                           onPressed: () => setState(() => _counter++),
                           icon: const Icon(Icons.add),
                           label: const Text('Increase'),
@@ -94,29 +108,42 @@ class _HomePageState extends State<HomePage> {
 
           // Navigation buttons - wrapped in InteractionContext
           InteractionContext(
-            description: 'Navigation section with buttons to open pages and modals',
+            description:
+                'Navigation section with buttons to open pages and modals',
             child: Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Text('Navigation', style: Theme.of(context).textTheme.titleMedium),
+                    Text(
+                      'Navigation',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
                     const SizedBox(height: 12),
                     FilledButton(
-                      key: const InteractionKey('nav-detail-btn', description: 'Navigate to detail page'),
+                      key: const InteractionKey(
+                        'nav-detail-btn',
+                        description: 'Navigate to detail page',
+                      ),
                       onPressed: () => _navigateToDetail(context),
                       child: const Text('Go to Detail Page'),
                     ),
                     const SizedBox(height: 8),
                     OutlinedButton(
-                      key: const InteractionKey('open-modal-btn', description: 'Open bottom sheet modal'),
+                      key: const InteractionKey(
+                        'open-modal-btn',
+                        description: 'Open bottom sheet modal',
+                      ),
                       onPressed: () => _openBottomSheet(context),
                       child: const Text('Open Bottom Sheet'),
                     ),
                     const SizedBox(height: 8),
                     OutlinedButton(
-                      key: const InteractionKey('open-dialog-btn', description: 'Open alert dialog'),
+                      key: const InteractionKey(
+                        'open-dialog-btn',
+                        description: 'Open alert dialog',
+                      ),
                       onPressed: () => _openDialog(context),
                       child: const Text('Open Dialog'),
                     ),
@@ -139,17 +166,30 @@ class _HomePageState extends State<HomePage> {
                   children: [
                     Row(
                       children: [
-                        Text('Items (${_items.length})', style: Theme.of(context).textTheme.titleMedium),
+                        Text(
+                          'Items (${_items.length})',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
                         const Spacer(),
                         IconButton(
-                          key: const InteractionKey('add-item-btn', description: 'Add new item to list'),
+                          key: const InteractionKey(
+                            'add-item-btn',
+                            description: 'Add new item to list',
+                          ),
                           icon: const Icon(Icons.add_circle),
-                          onPressed: () => setState(() => _items.add('Item ${_items.length + 1}')),
+                          onPressed: () => setState(
+                            () => _items.add('Item ${_items.length + 1}'),
+                          ),
                         ),
                         IconButton(
-                          key: const InteractionKey('clear-items-btn', description: 'Clear all items'),
+                          key: const InteractionKey(
+                            'clear-items-btn',
+                            description: 'Clear all items',
+                          ),
                           icon: const Icon(Icons.delete_sweep),
-                          onPressed: _items.isEmpty ? null : () => setState(() => _items.clear()),
+                          onPressed: _items.isEmpty
+                              ? null
+                              : () => setState(() => _items.clear()),
                         ),
                       ],
                     ),
@@ -157,17 +197,27 @@ class _HomePageState extends State<HomePage> {
                     if (_items.isEmpty)
                       const Padding(
                         padding: EdgeInsets.all(16),
-                        child: Text('No items yet. Tap + to add some!', textAlign: TextAlign.center),
+                        child: Text(
+                          'No items yet. Tap + to add some!',
+                          textAlign: TextAlign.center,
+                        ),
                       )
                     else
                       ...List.generate(_items.length, (index) {
                         return ListTile(
-                          key: InteractionKey('item-$index', description: _items[index]),
+                          key: InteractionKey(
+                            'item-$index',
+                            description: _items[index],
+                          ),
                           title: Text(_items[index]),
                           trailing: IconButton(
-                            key: InteractionKey('delete-item-$index', description: 'Delete ${_items[index]}'),
+                            key: InteractionKey(
+                              'delete-item-$index',
+                              description: 'Delete ${_items[index]}',
+                            ),
                             icon: const Icon(Icons.close),
-                            onPressed: () => setState(() => _items.removeAt(index)),
+                            onPressed: () =>
+                                setState(() => _items.removeAt(index)),
                           ),
                         );
                       }),
@@ -195,9 +245,9 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _navigateToDetail(BuildContext context) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const DetailPage()),
-    );
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const DetailPage()));
   }
 
   void _openBottomSheet(BuildContext context) {
@@ -209,12 +259,20 @@ class _HomePageState extends State<HomePage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('Bottom Sheet', style: Theme.of(context).textTheme.headlineSmall),
+            Text(
+              'Bottom Sheet',
+              style: Theme.of(context).textTheme.headlineSmall,
+            ),
             const SizedBox(height: 16),
-            const Text('This is a modal bottom sheet. The widget tree now includes these new elements.'),
+            const Text(
+              'This is a modal bottom sheet. The widget tree now includes these new elements.',
+            ),
             const SizedBox(height: 24),
             FilledButton(
-              key: const InteractionKey('sheet-close-btn', description: 'Close bottom sheet'),
+              key: const InteractionKey(
+                'sheet-close-btn',
+                description: 'Close bottom sheet',
+              ),
               onPressed: () => Navigator.pop(context),
               child: const Text('Close'),
             ),
@@ -230,20 +288,28 @@ class _HomePageState extends State<HomePage> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Alert Dialog'),
-        content: const Text('This dialog adds new widgets to the tree. When dismissed, they are removed.'),
+        content: const Text(
+          'This dialog adds new widgets to the tree. When dismissed, they are removed.',
+        ),
         actions: [
           TextButton(
-            key: const InteractionKey('dialog-cancel-btn', description: 'Cancel dialog'),
+            key: const InteractionKey(
+              'dialog-cancel-btn',
+              description: 'Cancel dialog',
+            ),
             onPressed: () => Navigator.pop(context),
             child: const Text('Cancel'),
           ),
           FilledButton(
-            key: const InteractionKey('dialog-confirm-btn', description: 'Confirm dialog'),
+            key: const InteractionKey(
+              'dialog-confirm-btn',
+              description: 'Confirm dialog',
+            ),
             onPressed: () {
               Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Confirmed!')),
-              );
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(const SnackBar(content: Text('Confirmed!')));
             },
             child: const Text('Confirm'),
           ),
@@ -253,10 +319,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _openSettingsModal(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (context) => const _SettingsDialog(),
-    );
+    showDialog(context: context, builder: (context) => const _SettingsDialog());
   }
 
   void _showAddItemDialog(BuildContext context) {
@@ -266,7 +329,10 @@ class _HomePageState extends State<HomePage> {
       builder: (context) => AlertDialog(
         title: const Text('Add Item'),
         content: TextField(
-          key: const InteractionKey('new-item-input', description: 'New item name input'),
+          key: const InteractionKey(
+            'new-item-input',
+            description: 'New item name input',
+          ),
           controller: controller,
           decoration: const InputDecoration(
             labelText: 'Item name',
@@ -276,12 +342,18 @@ class _HomePageState extends State<HomePage> {
         ),
         actions: [
           TextButton(
-            key: const InteractionKey('add-dialog-cancel-btn', description: 'Cancel adding item'),
+            key: const InteractionKey(
+              'add-dialog-cancel-btn',
+              description: 'Cancel adding item',
+            ),
             onPressed: () => Navigator.pop(context),
             child: const Text('Cancel'),
           ),
           FilledButton(
-            key: const InteractionKey('add-dialog-add-btn', description: 'Confirm add item'),
+            key: const InteractionKey(
+              'add-dialog-add-btn',
+              description: 'Confirm add item',
+            ),
             onPressed: () {
               final name = controller.text.trim();
               if (name.isNotEmpty) {
@@ -313,7 +385,10 @@ class _ExpandableCardState extends State<_ExpandableCard> {
       child: Column(
         children: [
           ListTile(
-            key: const InteractionKey('expandable-header', description: 'Toggle expandable section'),
+            key: const InteractionKey(
+              'expandable-header',
+              description: 'Toggle expandable section',
+            ),
             title: const Text('Expandable Section'),
             subtitle: Text(_expanded ? 'Tap to collapse' : 'Tap to expand'),
             trailing: Icon(_expanded ? Icons.expand_less : Icons.expand_more),
@@ -326,13 +401,20 @@ class _ExpandableCardState extends State<_ExpandableCard> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Text('This content appears when expanded. These widgets are added to the tree.'),
+                  const Text(
+                    'This content appears when expanded. These widgets are added to the tree.',
+                  ),
                   const SizedBox(height: 12),
                   FilledButton.tonal(
-                    key: const InteractionKey('expanded-action-btn', description: 'Action inside expanded section'),
+                    key: const InteractionKey(
+                      'expanded-action-btn',
+                      description: 'Action inside expanded section',
+                    ),
                     onPressed: () {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Action from expanded section!')),
+                        const SnackBar(
+                          content: Text('Action from expanded section!'),
+                        ),
                       );
                     },
                     child: const Text('Expanded Action'),
@@ -340,7 +422,9 @@ class _ExpandableCardState extends State<_ExpandableCard> {
                 ],
               ),
             ),
-            crossFadeState: _expanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+            crossFadeState: _expanded
+                ? CrossFadeState.showSecond
+                : CrossFadeState.showFirst,
             duration: const Duration(milliseconds: 200),
           ),
         ],
@@ -369,13 +453,19 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         mainAxisSize: MainAxisSize.min,
         children: [
           SwitchListTile(
-            key: const InteractionKey('dark-mode-switch', description: 'Toggle dark mode'),
+            key: const InteractionKey(
+              'dark-mode-switch',
+              description: 'Toggle dark mode',
+            ),
             title: const Text('Dark Mode'),
             value: _darkMode,
             onChanged: (v) => setState(() => _darkMode = v),
           ),
           SwitchListTile(
-            key: const InteractionKey('notifications-switch', description: 'Toggle notifications'),
+            key: const InteractionKey(
+              'notifications-switch',
+              description: 'Toggle notifications',
+            ),
             title: const Text('Notifications'),
             value: _notifications,
             onChanged: (v) => setState(() => _notifications = v),
@@ -383,7 +473,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
           const SizedBox(height: 8),
           Text('Font Size: ${(_fontSize * 100).toInt()}%'),
           Slider(
-            key: const InteractionKey('font-size-slider', description: 'Adjust font size'),
+            key: const InteractionKey(
+              'font-size-slider',
+              description: 'Adjust font size',
+            ),
             value: _fontSize,
             min: 0.5,
             max: 2.0,
@@ -394,7 +487,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       ),
       actions: [
         FilledButton(
-          key: const InteractionKey('settings-save-btn', description: 'Save settings'),
+          key: const InteractionKey(
+            'settings-save-btn',
+            description: 'Save settings',
+          ),
           onPressed: () => Navigator.pop(context),
           child: const Text('Save'),
         ),
@@ -425,23 +521,36 @@ class DetailPage extends StatelessWidget {
             const SizedBox(height: 16),
             Text(
               'Detail Page',
-              key: const InteractionKey('detail-title', description: 'Detail page title'),
+              key: const InteractionKey(
+                'detail-title',
+                description: 'Detail page title',
+              ),
               style: Theme.of(context).textTheme.headlineMedium,
             ),
             const SizedBox(height: 8),
-            const Text('This is a new page with a completely different widget tree.'),
+            const Text(
+              'This is a new page with a completely different widget tree.',
+            ),
             const SizedBox(height: 32),
             FilledButton.icon(
-              key: const InteractionKey('detail-action-btn', description: 'Perform detail action'),
+              key: const InteractionKey(
+                'detail-action-btn',
+                description: 'Perform detail action',
+              ),
               onPressed: () {
                 showDialog(
                   context: context,
                   builder: (context) => AlertDialog(
                     title: const Text('Detail Action'),
-                    content: const Text('You triggered an action from the detail page!'),
+                    content: const Text(
+                      'You triggered an action from the detail page!',
+                    ),
                     actions: [
                       FilledButton(
-                        key: const InteractionKey('detail-dialog-ok-btn', description: 'OK button'),
+                        key: const InteractionKey(
+                          'detail-dialog-ok-btn',
+                          description: 'OK button',
+                        ),
                         onPressed: () => Navigator.pop(context),
                         child: const Text('OK'),
                       ),
@@ -458,3 +567,4 @@ class DetailPage extends StatelessWidget {
     );
   }
 }
+

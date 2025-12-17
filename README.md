@@ -1,213 +1,142 @@
-# Interaction Tree
+# interaction_tree
 
-A Flutter package that enables LLMs to interact with Flutter apps at runtime via VM service extensions.
+A Flutter package for annotating widgets with interaction metadata for automated testing and AI-driven interactions.
 
 ## Features
 
-- **LLM-driven interaction** - LLMs can inspect and interact with a Flutter app at runtime
-- **QA automation** - Programmatic verification of app behavior without manual interaction
-- **Test recording & replay** - Capture interaction flows and replay them as integration tests
-- **MCP Server** - Model Context Protocol server for LLM integration
+- **InteractionKey**: A custom key for marking widgets as interactive
+- **InteractableMixin**: Define custom actions on stateful widgets
+- **InteractionContext**: Add contextual descriptions to widget subtrees
+- **TreeDiff**: Detect changes between tree states
+- **DiagnosticCollector**: Capture logs, errors, and warnings during interactions
+- **Finder Helper**: `interaction('id')` finder for use with `flutter_test`
 
 ## Installation
 
 ```yaml
 dependencies:
-  interaction_tree: ^0.0.1
+  interaction_tree:
+    git:
+      url: https://github.com/rlch/interaction-tree
+      path: .
 ```
 
-## Quick Start
+## Usage
 
-### 1. Wrap your app with InteractionScope
+### Annotating Widgets
 
 ```dart
 import 'package:interaction_tree/interaction_tree.dart';
 
-void main() {
-  runApp(
-    MaterialApp(
-      home: InteractionScope(
-        child: MyHomePage(),
-      ),
-    ),
-  );
-}
-```
-
-### 2. Make widgets interactable
-
-**Option A: Using the mixin (recommended for StatefulWidgets)**
-
-```dart
-class _MyWidgetState extends State<MyWidget> 
-    with InteractableStateMixin<MyWidget> {
-  
+class MyWidget extends StatelessWidget {
   @override
-  String get interactionId => 'my-widget';
-  
-  @override
-  String get interactionDescription => 'A widget that does something';
-  
-  @override
-  List<Interaction> describeInteractions() => [
-    Interaction.tap(
-      description: 'Tap to do something',
-      onTap: _doSomething,
-    ),
-  ];
-}
-```
-
-**Option B: Using the Interactable wrapper**
-
-```dart
-Interactable(
-  id: 'submit-button',
-  description: 'Submit button',
-  interactions: (_) => [
-    GestureInteractions.tapGesture(
-      description: 'Tap to submit',
-      onTap: _submit,
-    ),
-  ],
-  child: ElevatedButton(
-    onPressed: _submit,
-    child: Text('Submit'),
-  ),
-)
-```
-
-### 3. Register the VM service (for LLM access)
-
-```dart
-@override
-void didChangeDependencies() {
-  super.didChangeDependencies();
-  final controller = InteractionScope.of(context);
-  InteractionService.register(controller);
-}
-```
-
-## Using with LLMs via MCP
-
-### Start the MCP Server
-
-```bash
-dart run interaction_tree:mcp_server
-```
-
-### Configure your MCP client
-
-Add to your MCP configuration (e.g., Claude Desktop, Amp, etc.):
-
-```json
-{
-  "mcpServers": {
-    "interaction_tree": {
-      "command": "dart",
-      "args": ["run", "interaction_tree:mcp_server"],
-      "cwd": "/path/to/your/flutter/project"
-    }
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        ElevatedButton(
+          key: const InteractionKey(
+            'login_button',
+            description: 'Submits the login form',
+          ),
+          onPressed: () => _login(),
+          child: const Text('Login'),
+        ),
+        TextField(
+          key: const InteractionKey('email_field'),
+        ),
+      ],
+    );
   }
 }
 ```
 
-### Available MCP Tools
-
-| Tool | Description |
-|------|-------------|
-| `connect` | Connect to a running Flutter app via VM service URI |
-| `disconnect` | Disconnect from the app |
-| `get_tree` | Get the full interaction tree |
-| `get_node` | Get a specific node by ID |
-| `execute` | Execute an interaction |
-
-### Example LLM Workflow
-
-1. **Start your Flutter app**: `flutter run`
-2. **Copy the VM service URI** from the output (e.g., `ws://127.0.0.1:12345/xxx=/ws`)
-3. **Connect via MCP**:
-   ```
-   Use connect tool with uri: ws://127.0.0.1:12345/xxx=/ws
-   ```
-4. **Explore the tree**:
-   ```
-   Use get_tree to see available interactions
-   ```
-5. **Execute interactions**:
-   ```
-   Use execute with targetId: "email-field", interaction: "enterText", arguments: {"text": "user@example.com"}
-   ```
-
-## Built-in Interactions
-
-### Gesture Interactions
+### Custom Actions with InteractableMixin
 
 ```dart
-GestureInteractions.tapGesture(...)
-GestureInteractions.doubleTapGesture(...)
-GestureInteractions.longPressGesture(...)
-GestureInteractions.dragGesture(...)
-GestureInteractions.scrollGesture(...)
-GestureInteractions.swipeGesture(...)
+class CounterWidget extends StatefulWidget {
+  const CounterWidget({super.key});
+
+  @override
+  State<CounterWidget> createState() => _CounterWidgetState();
+}
+
+class _CounterWidgetState extends State<CounterWidget> with InteractableMixin {
+  int _counter = 0;
+
+  @override
+  String get interactionId => 'counter_widget';
+
+  @override
+  List<InteractionAction> get actions => [
+    InteractionAction(
+      name: 'increment',
+      description: 'Increment the counter by 1',
+      execute: (_) async {
+        setState(() => _counter++);
+      },
+    ),
+    InteractionAction(
+      name: 'setCounter',
+      description: 'Set the counter to a specific value',
+      parameters: [
+        const ActionParameter(
+          name: 'value',
+          type: 'int',
+          description: 'The value to set',
+        ),
+      ],
+      execute: (args) async {
+        setState(() => _counter = args['value'] as int);
+      },
+    ),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Text('Counter: $_counter', key: InteractionKey(interactionId));
+  }
+}
 ```
 
-### Text Interactions
+### Using in Widget Tests
 
 ```dart
-TextInteractions.enterText(controller: controller)
-TextInteractions.clearText(controller: controller)
-TextInteractions.replaceText(controller: controller)
-TextInteractions.selectAllText(controller: controller)
-TextInteractions.submitText(onSubmit: callback)
+import 'package:flutter_test/flutter_test.dart';
+import 'package:interaction_tree/interaction_tree.dart';
+
+void main() {
+  testWidgets('can tap login button', (tester) async {
+    await tester.pumpWidget(const MyApp());
+    
+    // Use the interaction() finder
+    await tester.tap(interaction('login_button'));
+    await tester.pumpAndSettle();
+    
+    expect(interaction('welcome_message'), findsOneWidget);
+  });
+}
 ```
 
-### Core Interaction Factories
+### Adding Context
 
 ```dart
-Interaction.tap(description: '...', onTap: callback)
-Interaction.fill(controller: textController)
-Interaction.clear(controller: textController)
-Interaction.select(options: [...], onSelect: callback)
-Interaction.toggle(getValue: () => value, onChanged: callback)
-Interaction.increment(getValue: () => value, onChanged: callback)
-Interaction.decrement(getValue: () => value, onChanged: callback)
-Interaction.action(name: '...', description: '...', action: callback)
+InteractionContext(
+  description: 'User authentication form with email and password fields',
+  child: Column(
+    children: [
+      TextField(key: const InteractionKey('email_field')),
+      TextField(key: const InteractionKey('password_field')),
+      ElevatedButton(key: const InteractionKey('submit_button'), ...),
+    ],
+  ),
+)
 ```
 
-## Recording and Code Generation
+## Related Packages
 
-### Record interactions
-
-```dart
-final controller = InteractionScope.of(context);
-final recorder = InteractionRecorder(controller);
-
-recorder.startRecording(name: 'Login Flow');
-
-// ... perform interactions ...
-
-recorder.stopRecording();
-final flow = recorder.getFlow();
-```
-
-### Generate integration tests
-
-```dart
-final generator = IntegrationTestGenerator();
-final testCode = generator.generate(flow);
-print(testCode);
-```
-
-## Architecture
-
-```
-┌─────────────┐      MCP Protocol       ┌──────────────────────┐      VM Service      ┌─────────────┐
-│    LLM      │ ◄─────────────────────► │  interaction_tree    │ ◄──────────────────► │ Flutter App │
-│  (Claude)   │      (stdio)            │     MCP Server       │   (WebSocket)        │             │
-└─────────────┘                         └──────────────────────┘                      └─────────────┘
-```
+- [interaction_tree_driver](./packages/interaction_tree_driver) - Flutter Driver integration
+- [interaction_tree_mcp](./packages/interaction_tree_mcp) - MCP server for AI interactions
 
 ## License
 
-BSD-3-Clause
+MIT License - see [LICENSE](LICENSE) for details.

@@ -1,0 +1,32 @@
+{
+  "name": "navigate_and_return",
+  "description": "Navigate to detail page, trigger action, then return",
+  "version": 1,
+  "created_at": "2025-12-17T00:00:00.000Z",
+  "steps": [
+    {
+      "target_id": "nav-detail-btn",
+      "interaction": "tap",
+      "timestamp": "2025-12-17T00:00:01.000Z",
+      "settle": true
+    },
+    {
+      "target_id": "detail-action-btn",
+      "interaction": "tap",
+      "timestamp": "2025-12-17T00:00:02.000Z",
+      "settle": true
+    },
+    {
+      "target_id": "detail-dialog-ok-btn",
+      "interaction": "tap",
+      "timestamp": "2025-12-17T00:00:03.000Z",
+      "settle": true
+    },
+    {
+      "target_id": "back-btn",
+      "interaction": "tap",
+      "timestamp": "2025-12-17T00:00:04.000Z",
+      "settle": true
+    }
+  ]
+}
