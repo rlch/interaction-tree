@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:interaction_tree/interaction_tree.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Register VM service extensions for LLM/MCP interaction
+  InteractionTreeService.ensureInitialized();
   runApp(const MyApp());
 }
 
@@ -567,4 +570,3 @@ class DetailPage extends StatelessWidget {
     );
   }
 }
-

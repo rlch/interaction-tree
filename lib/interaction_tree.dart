@@ -1,5 +1,6 @@
 library;
 
+// Core types
 export 'src/core/action_parameter.dart' show ActionParameter;
 export 'src/core/diagnostic_collector.dart'
     show DiagnosticCollector, CapturedDiagnostics, CapturedError;
@@ -14,3 +15,6 @@ export 'src/core/interaction_target.dart' show InteractionTarget;
 export 'src/core/interaction_tree_finder.dart'
     show InteractionTreeFinder, interaction;
 export 'src/core/tree_diff.dart' show TreeDiff, TreeDiffer, TreeSnapshot;
+
+// VM Service (for LLM/MCP integration)
+export 'src/service/interaction_tree_service.dart' show InteractionTreeService;
