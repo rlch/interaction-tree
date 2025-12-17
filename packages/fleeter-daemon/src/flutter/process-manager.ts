@@ -2,7 +2,7 @@
  * Flutter process manager - handles spawning and managing flutter run processes.
  */
 
-import { spawn, ChildProcess, execSync } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -13,43 +13,43 @@ const VM_SERVICE_URI_REGEX =
 const MAX_LOGS = 1000;
 
 /**
- * Find the Flutter executable, checking common locations since launchd
- * doesn't have the user's shell PATH.
+ * Find the Flutter executable using Bun's native which() function.
+ * Falls back to checking common installation paths when running under
+ * environments without full PATH (e.g., launchd).
  */
 function findFlutterExecutable(): string {
-  // Check if flutter is in PATH first (works when run from terminal)
-  try {
-    const flutterPath = execSync('which flutter', { encoding: 'utf-8' }).trim();
-    if (flutterPath && existsSync(flutterPath)) {
-      return flutterPath;
-    }
-  } catch {
-    // Not in PATH, check common locations
+  // Use Bun's native which() - handles PATH resolution properly
+  const flutterPath = Bun.which('flutter');
+  if (flutterPath) {
+    return flutterPath;
   }
 
+  // Fallback: check common installation paths for environments without PATH
   const homeDir = process.env.HOME || '';
   const commonPaths = [
     // FVM (Flutter Version Manager)
     join(homeDir, 'fvm/default/bin/flutter'),
     join(homeDir, '.fvm/default/bin/flutter'),
-    // Homebrew
-    '/opt/homebrew/bin/flutter',
-    '/usr/local/bin/flutter',
     // Standard Flutter install locations
     join(homeDir, 'development/flutter/bin/flutter'),
     join(homeDir, 'flutter/bin/flutter'),
     join(homeDir, '.flutter/bin/flutter'),
+    // Homebrew (macOS)
+    '/opt/homebrew/bin/flutter',
+    '/usr/local/bin/flutter',
     // Snap (Linux)
     '/snap/bin/flutter',
+    // asdf
+    join(homeDir, '.asdf/shims/flutter'),
   ];
 
-  for (const flutterPath of commonPaths) {
-    if (existsSync(flutterPath)) {
-      return flutterPath;
+  for (const path of commonPaths) {
+    if (existsSync(path)) {
+      return path;
     }
   }
 
-  // Fall back to 'flutter' and hope it works
+  // Final fallback - let the system try to find it
   return 'flutter';
 }
 
@@ -97,11 +97,7 @@ export class FlutterProcessManager extends EventEmitter {
       const proc = spawn(flutterCmd, args, {
         cwd: projectPath,
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: {
-          ...process.env,
-          // Ensure Flutter can find its SDK
-          PATH: `${process.env.PATH || ''}:/opt/homebrew/bin:/usr/local/bin`,
-        },
+        env: process.env,
       });
 
       const flutterProcess: FlutterProcess = {

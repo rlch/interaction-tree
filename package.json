@@ -1,0 +1,43 @@
+{
+  "name": "interaction-tree",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Flutter testing and AI-driven interaction system",
+  "type": "module",
+  "workspaces": [
+    "packages/fleeter-daemon",
+    "packages/fleeter-mcp-proxy"
+  ],
+  "scripts": {
+    "build": "bun run build:daemon && bun run build:proxy",
+    "build:daemon": "bun run --cwd packages/fleeter-daemon build",
+    "build:proxy": "bun run --cwd packages/fleeter-mcp-proxy build",
+    
+    "dev": "bun run --cwd packages/fleeter-daemon dev",
+    
+    "test": "bun run --cwd packages/fleeter-daemon test",
+    "test:watch": "bun run --cwd packages/fleeter-daemon test:watch",
+    
+    "typecheck": "bun run typecheck:daemon && bun run typecheck:proxy",
+    "typecheck:daemon": "bun run --cwd packages/fleeter-daemon typecheck",
+    "typecheck:proxy": "bun run --cwd packages/fleeter-mcp-proxy typecheck",
+    
+    "lint": "bun run lint:daemon && bun run lint:proxy",
+    "lint:daemon": "bun run --cwd packages/fleeter-daemon lint",
+    "lint:proxy": "bun run --cwd packages/fleeter-mcp-proxy lint",
+
+    "daemon:start": "bun run --cwd packages/fleeter-daemon start",
+    "daemon:install": "bun run scripts/daemon-install.ts",
+    "daemon:uninstall": "bun run scripts/daemon-uninstall.ts",
+    "daemon:status": "bun run scripts/daemon-status.ts",
+    "daemon:logs": "tail -f ~/Library/Logs/fleeter-daemon.log",
+    "daemon:restart": "bun run daemon:uninstall && bun run daemon:install"
+  },
+  "devDependencies": {
+    "bun-types": "^1.1.0"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "license": "MIT"
+}
