@@ -12,7 +12,7 @@ use ratatui::{
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let t = theme();
-    let logs: Vec<&LogEntry> = app.filtered_session_logs().collect();
+    let logs: Vec<&LogEntry> = app.filtered_interaction_logs().collect();
     let log_count = logs.len();
 
     let inner_height = area.height.saturating_sub(2) as usize;
@@ -27,9 +27,11 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     let title = if let Some(ref filter) = app.filter {
-        format!(" Session [{}/{}] filter: {} ", visible_end, log_count, filter)
+        format!(" Interactions [{}/{}] filter: {} ", visible_end, log_count, filter)
+    } else if log_count == 0 {
+        " Interactions (none yet) ".to_string()
     } else {
-        format!(" Session [{}] ", log_count)
+        format!(" Interactions [{}] ", log_count)
     };
 
     let block = Block::default()
@@ -46,7 +48,7 @@ fn format_log_entry(entry: &LogEntry) -> Line<'static> {
 
     let (level_icon, level_color) = match entry.level {
         LogLevel::Debug => ("○", t.text_dim),
-        LogLevel::Info => ("•", t.text),
+        LogLevel::Info => ("▶", t.success),
         LogLevel::Warning => ("⚠", t.warning),
         LogLevel::Error => ("✗", t.error),
     };

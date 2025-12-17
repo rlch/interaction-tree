@@ -3,7 +3,7 @@ mod completion_popup;
 mod flutter_pane;
 mod help_bar;
 mod help_overlay;
-mod session_logs_pane;
+mod interactions_pane;
 mod session_picker;
 mod status_bar;
 mod toasts;
@@ -76,7 +76,7 @@ fn render_content_with_tabs(frame: &mut Frame, app: &App, area: Rect) {
         .split(area);
 
     // Render tab bar
-    let tab_titles: Vec<Line> = [ContentTab::Session, ContentTab::Flutter, ContentTab::Agent]
+    let tab_titles: Vec<Line> = [ContentTab::Flutter, ContentTab::Agent, ContentTab::Interactions]
         .iter()
         .map(|tab| {
             let is_active = app.content_tab == *tab;
@@ -92,9 +92,9 @@ fn render_content_with_tabs(frame: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     let selected_index = match app.content_tab {
-        ContentTab::Session => 0,
-        ContentTab::Flutter => 1,
-        ContentTab::Agent => 2,
+        ContentTab::Flutter => 0,
+        ContentTab::Agent => 1,
+        ContentTab::Interactions => 2,
     };
 
     let tabs = Tabs::new(tab_titles)
@@ -107,8 +107,8 @@ fn render_content_with_tabs(frame: &mut Frame, app: &App, area: Rect) {
 
     // Render active pane
     match app.content_tab {
-        ContentTab::Session => session_logs_pane::render(frame, app, content_chunks[1]),
         ContentTab::Flutter => flutter_pane::render(frame, app, content_chunks[1]),
         ContentTab::Agent => agent_pane::render(frame, app, content_chunks[1]),
+        ContentTab::Interactions => interactions_pane::render(frame, app, content_chunks[1]),
     }
 }

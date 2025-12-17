@@ -71,37 +71,37 @@ pub enum Pane {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ContentTab {
-    /// Session-level logs (daemon events, session status)
-    #[default]
-    Session,
     /// Flutter logs (from flutter run process)
+    #[default]
     Flutter,
     /// Agent conversation and tool calls
     Agent,
+    /// Interaction execution history
+    Interactions,
 }
 
 impl ContentTab {
     pub fn next(self) -> Self {
         match self {
-            ContentTab::Session => ContentTab::Flutter,
             ContentTab::Flutter => ContentTab::Agent,
-            ContentTab::Agent => ContentTab::Session,
+            ContentTab::Agent => ContentTab::Interactions,
+            ContentTab::Interactions => ContentTab::Flutter,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            ContentTab::Session => ContentTab::Agent,
-            ContentTab::Flutter => ContentTab::Session,
+            ContentTab::Flutter => ContentTab::Interactions,
             ContentTab::Agent => ContentTab::Flutter,
+            ContentTab::Interactions => ContentTab::Agent,
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            ContentTab::Session => "Session",
             ContentTab::Flutter => "Flutter",
             ContentTab::Agent => "Agent",
+            ContentTab::Interactions => "Interactions",
         }
     }
 }
@@ -117,12 +117,12 @@ pub struct App {
 
     pub app_status: AppStatus,
 
-    /// Session-level logs (daemon events, status changes)
-    pub session_logs: VecDeque<LogEntry>,
     /// Flutter logs (from flutter run process)
     pub flutter_logs: VecDeque<LogEntry>,
     /// Agent events (tool calls, responses)
     pub agent_events: VecDeque<MonitoringEvent>,
+    /// Interaction execution history (taps, scrolls, etc.)
+    pub interaction_logs: VecDeque<LogEntry>,
     pub max_events: usize,
 
     pub mode: Mode,
@@ -227,9 +227,9 @@ impl App {
 
             app_status: AppStatus::Unknown,
 
-            session_logs: VecDeque::with_capacity(max_events),
             flutter_logs: VecDeque::with_capacity(max_events),
             agent_events: VecDeque::with_capacity(max_events),
+            interaction_logs: VecDeque::with_capacity(max_events),
             max_events,
 
             mode: Mode::SessionPicker,
@@ -326,11 +326,11 @@ impl App {
         self.tree_state = TreeState::default();
     }
 
-    pub fn push_session_log(&mut self, entry: LogEntry) {
-        if self.session_logs.len() >= self.max_events {
-            self.session_logs.pop_front();
+    pub fn push_interaction_log(&mut self, entry: LogEntry) {
+        if self.interaction_logs.len() >= self.max_events {
+            self.interaction_logs.pop_front();
         }
-        self.session_logs.push_back(entry);
+        self.interaction_logs.push_back(entry);
     }
 
     pub fn push_flutter_log(&mut self, entry: LogEntry) {
@@ -367,28 +367,21 @@ impl App {
                 message: extract_flutter_log(&event.payload),
             };
             self.push_flutter_log(entry);
-        } else {
-            // Session-level events (session created, status changes, etc.)
+        } else if event_type.contains("interaction") || event_type.contains("tap") || event_type.contains("scroll") {
+            // Interaction events (execute_interaction, taps, scrolls)
             let entry = LogEntry {
                 ts: event.ts.clone(),
-                level: if event_type.contains("error") {
-                    LogLevel::Error
-                } else if event_type.contains("warn") {
-                    LogLevel::Warning
-                } else if event_type.contains("debug") {
-                    LogLevel::Debug
-                } else {
-                    LogLevel::Info
-                },
+                level: LogLevel::Info,
                 message: format!("[{}] {}", event.source, summarize_payload(&event.payload)),
             };
-            self.push_session_log(entry);
+            self.push_interaction_log(entry);
         }
+        // Note: session-level events are no longer logged separately
     }
 
-    pub fn filtered_session_logs(&self) -> impl Iterator<Item = &LogEntry> {
+    pub fn filtered_interaction_logs(&self) -> impl Iterator<Item = &LogEntry> {
         let filter = self.filter.clone();
-        self.session_logs.iter().filter(move |e| {
+        self.interaction_logs.iter().filter(move |e| {
             let Some(ref pattern) = filter else {
                 return true;
             };
@@ -556,9 +549,9 @@ impl App {
 
     pub fn scroll_down(&mut self) {
         let event_count = match self.content_tab {
-            ContentTab::Session => self.filtered_session_logs().count(),
             ContentTab::Flutter => self.filtered_flutter_logs().count(),
             ContentTab::Agent => self.filtered_agent_events().count(),
+            ContentTab::Interactions => self.filtered_interaction_logs().count(),
         };
         if event_count > 0 && self.scroll_offset < event_count - 1 {
             self.scroll_offset += 1;
@@ -590,9 +583,9 @@ impl App {
     }
 
     pub fn clear_events(&mut self) {
-        self.session_logs.clear();
         self.flutter_logs.clear();
         self.agent_events.clear();
+        self.interaction_logs.clear();
         self.scroll_offset = 0;
     }
 
@@ -707,28 +700,28 @@ mod tests {
     }
 
     #[test]
-    fn test_push_session_log_trims_to_max() {
+    fn test_push_interaction_log_trims_to_max() {
         let mut app = App::new("ws://localhost:9000".to_string(), 3, test_project());
         for i in 0..4 {
-            app.push_session_log(LogEntry {
+            app.push_interaction_log(LogEntry {
                 ts: format!("2024-01-01T00:00:0{}Z", i),
                 level: LogLevel::Info,
                 message: format!("msg{}", i),
             });
         }
 
-        assert_eq!(app.session_logs.len(), 3);
-        assert!(app.session_logs[0].message.contains("msg1"));
-        assert!(app.session_logs[2].message.contains("msg3"));
+        assert_eq!(app.interaction_logs.len(), 3);
+        assert!(app.interaction_logs[0].message.contains("msg1"));
+        assert!(app.interaction_logs[2].message.contains("msg3"));
     }
 
     #[test]
     fn test_content_tab_cycling() {
-        assert_eq!(ContentTab::Session.next(), ContentTab::Flutter);
         assert_eq!(ContentTab::Flutter.next(), ContentTab::Agent);
-        assert_eq!(ContentTab::Agent.next(), ContentTab::Session);
+        assert_eq!(ContentTab::Agent.next(), ContentTab::Interactions);
+        assert_eq!(ContentTab::Interactions.next(), ContentTab::Flutter);
 
-        assert_eq!(ContentTab::Session.prev(), ContentTab::Agent);
+        assert_eq!(ContentTab::Flutter.prev(), ContentTab::Interactions);
         assert_eq!(ContentTab::Agent.prev(), ContentTab::Flutter);
     }
 

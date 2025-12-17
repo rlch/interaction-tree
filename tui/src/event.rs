@@ -552,9 +552,9 @@ async fn handle_input_prompt_mode(
 fn current_event_count(app: &App) -> usize {
     use crate::app::ContentTab;
     match app.content_tab {
-        ContentTab::Session => app.filtered_session_logs().count(),
         ContentTab::Flutter => app.filtered_flutter_logs().count(),
         ContentTab::Agent => app.filtered_agent_events().count(),
+        ContentTab::Interactions => app.filtered_interaction_logs().count(),
     }
 }
 
