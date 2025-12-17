@@ -2,19 +2,56 @@
  * JSON Schema definitions for MCP tools.
  */
 // ─────────────────────────────────────────────────────────────────────────────
-// Lifecycle Management
+// Session Management
 // ─────────────────────────────────────────────────────────────────────────────
-export const runSchema = {
+export const createSessionSchema = {
     type: 'object',
     properties: {
+        name: {
+            type: 'string',
+            description: 'Human-readable name for the session',
+        },
         projectPath: {
             type: 'string',
             description: 'Absolute path to the Flutter project directory',
         },
-        name: {
+    },
+    required: ['name', 'projectPath'],
+};
+export const destroySessionSchema = {
+    type: 'object',
+    properties: {
+        session: {
             type: 'string',
-            description: 'Human-readable name for this instance (optional)',
+            description: 'Session name or ID to destroy',
         },
+    },
+    required: ['session'],
+};
+export const listSessionsSchema = {
+    type: 'object',
+    properties: {},
+};
+export const connectSchema = {
+    type: 'object',
+    properties: {
+        session: {
+            type: 'string',
+            description: 'Session name or ID to connect to',
+        },
+    },
+    required: ['session'],
+};
+export const disconnectSchema = {
+    type: 'object',
+    properties: {},
+};
+// ─────────────────────────────────────────────────────────────────────────────
+// App Lifecycle (requires connected session)
+// ─────────────────────────────────────────────────────────────────────────────
+export const runSchema = {
+    type: 'object',
+    properties: {
         device: {
             type: 'string',
             description: 'Device ID to run on (e.g., "macos", "chrome", "emulator-5554")',
@@ -37,32 +74,14 @@ export const runSchema = {
             description: 'Additional arguments to pass to flutter run',
         },
     },
-    required: ['projectPath'],
 };
 export const stopSchema = {
-    type: 'object',
-    properties: {
-        instanceId: {
-            type: 'string',
-            description: 'Instance ID or name (optional if only one instance running)',
-        },
-    },
-};
-export const listSchema = {
     type: 'object',
     properties: {},
 };
 export const rebuildSchema = {
     type: 'object',
     properties: {
-        instanceId: {
-            type: 'string',
-            description: 'Instance ID or name (optional if only one instance running)',
-        },
-        projectPath: {
-            type: 'string',
-            description: 'Absolute path to the Flutter project directory',
-        },
         device: {
             type: 'string',
             description: 'Device ID to run on',
@@ -89,15 +108,43 @@ export const rebuildSchema = {
             description: 'Additional arguments to pass to flutter run',
         },
     },
-    required: ['projectPath'],
 };
+export const getStatusSchema = {
+    type: 'object',
+    properties: {},
+};
+export const hotReloadSchema = {
+    type: 'object',
+    properties: {},
+};
+export const hotRestartSchema = {
+    type: 'object',
+    properties: {},
+};
+export const getLogsSchema = {
+    type: 'object',
+    properties: {
+        maxLines: {
+            type: 'number',
+            description: 'Maximum number of log lines to return (default: 100)',
+        },
+    },
+};
+export const getErrorsSchema = {
+    type: 'object',
+    properties: {
+        clear: {
+            type: 'boolean',
+            description: 'Clear errors after retrieving',
+        },
+    },
+};
+// ─────────────────────────────────────────────────────────────────────────────
+// Interaction Tree (requires connected session with running app)
+// ─────────────────────────────────────────────────────────────────────────────
 export const getTreeSchema = {
     type: 'object',
     properties: {
-        instanceId: {
-            type: 'string',
-            description: 'Instance ID or name (optional if only one instance running)',
-        },
         includeBounds: {
             type: 'boolean',
             description: 'Include global x/y/width/height for each target',
@@ -115,10 +162,6 @@ export const getTreeSchema = {
 export const targetIdSchema = {
     type: 'object',
     properties: {
-        instanceId: {
-            type: 'string',
-            description: 'Instance ID or name (optional if only one instance running)',
-        },
         id: {
             type: 'string',
             description: 'The InteractionKey id of the target',
@@ -129,10 +172,6 @@ export const targetIdSchema = {
 export const enterTextSchema = {
     type: 'object',
     properties: {
-        instanceId: {
-            type: 'string',
-            description: 'Instance ID or name (optional if only one instance running)',
-        },
         id: {
             type: 'string',
             description: 'The InteractionKey id of the target',
@@ -147,10 +186,6 @@ export const enterTextSchema = {
 export const scrollSchema = {
     type: 'object',
     properties: {
-        instanceId: {
-            type: 'string',
-            description: 'Instance ID or name (optional if only one instance running)',
-        },
         id: {
             type: 'string',
             description: 'The InteractionKey id of the target',
@@ -169,10 +204,6 @@ export const scrollSchema = {
 export const scrollIntoViewSchema = {
     type: 'object',
     properties: {
-        instanceId: {
-            type: 'string',
-            description: 'Instance ID or name (optional if only one instance running)',
-        },
         id: {
             type: 'string',
             description: 'The InteractionKey id of the target',
@@ -187,10 +218,6 @@ export const scrollIntoViewSchema = {
 export const waitForSchema = {
     type: 'object',
     properties: {
-        instanceId: {
-            type: 'string',
-            description: 'Instance ID or name (optional if only one instance running)',
-        },
         id: {
             type: 'string',
             description: 'The InteractionKey id of the target',
@@ -210,10 +237,6 @@ export const waitForSchema = {
 export const executeActionSchema = {
     type: 'object',
     properties: {
-        instanceId: {
-            type: 'string',
-            description: 'Instance ID or name (optional if only one instance running)',
-        },
         id: {
             type: 'string',
             description: 'The InteractionKey id of the target',
@@ -232,10 +255,6 @@ export const executeActionSchema = {
 export const batchSchema = {
     type: 'object',
     properties: {
-        instanceId: {
-            type: 'string',
-            description: 'Instance ID or name (optional if only one instance running)',
-        },
         steps: {
             type: 'array',
             description: 'Array of step objects',
@@ -274,13 +293,12 @@ export const batchSchema = {
     },
     required: ['steps'],
 };
+// ─────────────────────────────────────────────────────────────────────────────
+// Agent Mode
+// ─────────────────────────────────────────────────────────────────────────────
 export const executeIntentSchema = {
     type: 'object',
     properties: {
-        instanceId: {
-            type: 'string',
-            description: 'Instance ID or name (optional if only one instance running)',
-        },
         intent: {
             type: 'string',
             description: 'The natural language intent to execute',
@@ -300,58 +318,5 @@ export const executeIntentSchema = {
         },
     },
     required: ['intent'],
-};
-export const getStatusSchema = {
-    type: 'object',
-    properties: {
-        instanceId: {
-            type: 'string',
-            description: 'Instance ID or name. If not provided, returns list of all instances.',
-        },
-    },
-};
-export const hotReloadSchema = {
-    type: 'object',
-    properties: {
-        instanceId: {
-            type: 'string',
-            description: 'Instance ID or name (optional if only one instance running)',
-        },
-    },
-};
-export const hotRestartSchema = {
-    type: 'object',
-    properties: {
-        instanceId: {
-            type: 'string',
-            description: 'Instance ID or name (optional if only one instance running)',
-        },
-    },
-};
-export const getLogsSchema = {
-    type: 'object',
-    properties: {
-        instanceId: {
-            type: 'string',
-            description: 'Instance ID or name (optional if only one instance running)',
-        },
-        maxLines: {
-            type: 'number',
-            description: 'Maximum number of log lines to return (default: 100)',
-        },
-    },
-};
-export const getErrorsSchema = {
-    type: 'object',
-    properties: {
-        instanceId: {
-            type: 'string',
-            description: 'Instance ID or name (optional if only one instance running)',
-        },
-        clear: {
-            type: 'boolean',
-            description: 'Clear errors after retrieving',
-        },
-    },
 };
 //# sourceMappingURL=schemas.js.map

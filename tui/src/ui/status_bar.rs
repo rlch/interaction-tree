@@ -7,21 +7,58 @@ use ratatui::{
     widgets::Paragraph,
     Frame,
 };
+use throbber_widgets_tui::ThrobberState;
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let t = theme();
 
-    let ws_status = match app.ws_state {
-        WsState::Connected => Span::styled("Connected", Style::default().fg(t.success)),
-        WsState::Connecting => Span::styled(
-            "Connecting…",
-            Style::default()
-                .fg(t.warning)
-                .add_modifier(Modifier::ITALIC),
-        ),
-        WsState::Disconnected => Span::styled("Disconnected", Style::default().fg(t.error)),
+    let mut spans = vec![Span::styled(
+        " IT Monitor",
+        Style::default().fg(t.title).add_modifier(Modifier::BOLD),
+    )];
+
+    let sep = Span::styled(" │ ", Style::default().fg(t.text_dim));
+
+    // Project name
+    spans.push(sep.clone());
+    spans.push(Span::styled(
+        &app.project.name,
+        Style::default().fg(t.info),
+    ));
+
+    // Selected instance
+    if let Some(ref instance) = app.selected_instance {
+        spans.push(sep.clone());
+        spans.push(Span::styled(
+            format!("@{}", truncate(instance, 12)),
+            Style::default().fg(t.source_tree),
+        ));
+    }
+
+    spans.push(sep.clone());
+
+    // Connection status with throbber when connecting
+    match app.ws_state {
+        WsState::Connected => {
+            spans.push(Span::styled("Connected", Style::default().fg(t.success)));
+        }
+        WsState::Connecting => {
+            spans.push(Span::styled(
+                "Connecting",
+                Style::default()
+                    .fg(t.warning)
+                    .add_modifier(Modifier::ITALIC),
+            ));
+        }
+        WsState::Disconnected => {
+            spans.push(Span::styled("Disconnected", Style::default().fg(t.error)));
+        }
     };
 
+    spans.push(sep.clone());
+    spans.push(Span::styled(&app.server_uri, Style::default().fg(t.text_dim)));
+
+    // App status
     let app_status = match &app.app_status {
         AppStatus::Unknown => Span::styled("unknown", Style::default().fg(t.text_dim)),
         AppStatus::Starting => Span::styled(
@@ -41,24 +78,11 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         ),
     };
 
-    let sep = Span::styled(" │ ", Style::default().fg(t.text_dim));
+    spans.push(sep.clone());
+    spans.push(Span::raw("app: "));
+    spans.push(app_status);
 
-    let mut spans = vec![
-        Span::styled(
-            " IT Monitor",
-            Style::default()
-                .fg(t.title)
-                .add_modifier(Modifier::BOLD),
-        ),
-        sep.clone(),
-        ws_status,
-        sep.clone(),
-        Span::styled(&app.server_uri, Style::default().fg(t.text_dim)),
-        sep.clone(),
-        Span::raw("app: "),
-        app_status,
-    ];
-
+    // Widget count if tree exists
     if let Some(tree) = &app.tree {
         let count = count_nodes(&tree.nodes);
         spans.push(sep.clone());
@@ -68,10 +92,24 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         ));
     }
 
-    let line = Line::from(spans);
+    // Throbber when pending response or connecting
+    if app.pending_response || app.ws_state == WsState::Connecting {
+        spans.push(Span::raw(" "));
+        let throbber_spans = render_throbber(&app.throbber_state);
+        spans.extend(throbber_spans);
+    }
 
-    let paragraph = Paragraph::new(line).style(Style::default().bg(t.background));
+    let line = Line::from(spans);
+    let paragraph = Paragraph::new(line);
     frame.render_widget(paragraph, area);
+}
+
+fn render_throbber(state: &ThrobberState) -> Vec<Span<'static>> {
+    let t = theme();
+    let symbols = throbber_widgets_tui::BRAILLE_SIX.symbols;
+    let idx = state.index() as usize % symbols.len();
+    let symbol = symbols[idx];
+    vec![Span::styled(symbol.to_string(), Style::default().fg(t.warning))]
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -83,7 +121,7 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 fn count_nodes(nodes: &[TreeNode]) -> usize {
-    nodes.iter().fold(0, |acc, node| {
-        acc + 1 + count_nodes(&node.children)
-    })
+    nodes
+        .iter()
+        .fold(0, |acc, node| acc + 1 + count_nodes(&node.children))
 }

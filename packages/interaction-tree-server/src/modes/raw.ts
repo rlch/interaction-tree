@@ -1,6 +1,6 @@
 /**
  * Raw mode - direct tool access without AI agent.
- * Registers all interaction tree and dart tooling tools directly.
+ * Registers all session, lifecycle, and interaction tree tools directly.
  */
 
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -10,7 +10,6 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import * as schemas from '../tools/schemas.js';
 import * as handlers from '../tools/handlers.js';
-import type { RunOptions, RebuildOptions } from '../flutter/app-manager.js';
 import { getMonitor } from '../monitoring/index.js';
 
 async function withMonitoring<T>(
@@ -25,13 +24,17 @@ async function withMonitoring<T>(
   try {
     const result = await fn();
     const durationMs = Date.now() - start;
-    const isError = typeof result === 'object' && result !== null &&
+    const isError =
+      typeof result === 'object' &&
+      result !== null &&
       'content' in result &&
       Array.isArray((result as { content: unknown[] }).content) &&
       (result as { content: Array<{ text?: string }> }).content[0]?.text?.startsWith('Error:');
     monitor.mcp.response('tools/call', durationMs, !isError, {
       toolName,
-      error: isError ? (result as { content: Array<{ text: string }> }).content[0]?.text : undefined,
+      error: isError
+        ? (result as { content: Array<{ text: string }> }).content[0]?.text
+        : undefined,
     });
     return result;
   } catch (err) {
@@ -48,45 +51,65 @@ export function registerRawTools(server: Server): void {
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [
       // ───────────────────────────────────────────────────────────────────────
-      // Lifecycle Management
+      // Session Management
+      // ───────────────────────────────────────────────────────────────────────
+      {
+        name: 'create_session',
+        description: 'Create a new session for a Flutter project.',
+        inputSchema: schemas.createSessionSchema,
+      },
+      {
+        name: 'destroy_session',
+        description: 'Destroy a session (stops app if running).',
+        inputSchema: schemas.destroySessionSchema,
+      },
+      {
+        name: 'list_sessions',
+        description: 'List all sessions.',
+        inputSchema: schemas.listSessionsSchema,
+      },
+      {
+        name: 'connect',
+        description: 'Connect to a session. Required before using most other tools.',
+        inputSchema: schemas.connectSchema,
+      },
+      {
+        name: 'disconnect',
+        description: 'Disconnect from the current session.',
+        inputSchema: schemas.disconnectSchema,
+      },
+
+      // ───────────────────────────────────────────────────────────────────────
+      // App Lifecycle (requires connected session)
       // ───────────────────────────────────────────────────────────────────────
       {
         name: 'run',
-        description:
-          'Run a Flutter app. Spawns flutter run, captures VM service URI, and auto-connects.',
+        description: 'Run the Flutter app in the connected session.',
         inputSchema: schemas.runSchema,
       },
       {
         name: 'stop',
-        description: 'Stop the running Flutter app.',
+        description: 'Stop the Flutter app in the connected session.',
         inputSchema: schemas.stopSchema,
       },
       {
-        name: 'list',
-        description: 'List all running Flutter app instances.',
-        inputSchema: schemas.listSchema,
-      },
-      {
         name: 'rebuild',
-        description:
-          'Full rebuild - stops the app, optionally runs flutter clean, then runs again.',
+        description: 'Full rebuild - stop, optionally clean, then run again.',
         inputSchema: schemas.rebuildSchema,
       },
       {
         name: 'get_status',
-        description: 'Get the current app status (process state and VM connection).',
+        description: 'Get the current session and app status.',
         inputSchema: schemas.getStatusSchema,
       },
       {
         name: 'hot_reload',
-        description:
-          'Hot reload - apply code changes while preserving app state.',
+        description: 'Hot reload - apply code changes while preserving app state.',
         inputSchema: schemas.hotReloadSchema,
       },
       {
         name: 'hot_restart',
-        description:
-          'Hot restart - apply code changes and reset app state (same process).',
+        description: 'Hot restart - apply code changes and reset app state.',
         inputSchema: schemas.hotRestartSchema,
       },
       {
@@ -101,12 +124,11 @@ export function registerRawTools(server: Server): void {
       },
 
       // ───────────────────────────────────────────────────────────────────────
-      // Interaction Tree
+      // Interaction Tree (requires running app in connected session)
       // ───────────────────────────────────────────────────────────────────────
       {
         name: 'get_tree',
-        description:
-          'Get all InteractionKey-marked widgets from the running Flutter app.',
+        description: 'Get all InteractionKey-marked widgets from the running Flutter app.',
         inputSchema: schemas.getTreeSchema,
       },
       {
@@ -161,8 +183,7 @@ export function registerRawTools(server: Server): void {
       },
       {
         name: 'execute_action',
-        description:
-          'Execute a custom action defined on a widget via InteractableMixin.',
+        description: 'Execute a custom action defined on a widget via InteractableMixin.',
         inputSchema: schemas.executeActionSchema,
       },
       {
@@ -177,74 +198,91 @@ export function registerRawTools(server: Server): void {
     const { name, arguments: args } = request.params;
 
     switch (name) {
-      // Lifecycle Management
+      // Session Management
+      case 'create_session':
+        return withMonitoring(name, args, () =>
+          handlers.handleCreateSession(args as { name: string; projectPath: string })
+        );
+      case 'destroy_session':
+        return withMonitoring(name, args, () =>
+          handlers.handleDestroySession(args as { session: string })
+        );
+      case 'list_sessions':
+        return withMonitoring(name, args, () => handlers.handleListSessions());
+      case 'connect':
+        return withMonitoring(name, args, () =>
+          handlers.handleConnect(args as { session: string })
+        );
+      case 'disconnect':
+        return withMonitoring(name, args, () => handlers.handleDisconnect());
+
+      // App Lifecycle
       case 'run':
         return withMonitoring(name, args, () =>
-          handlers.handleRun(args as unknown as RunOptions));
+          handlers.handleRun(args as Parameters<typeof handlers.handleRun>[0])
+        );
       case 'stop':
-        return withMonitoring(name, args, () =>
-          handlers.handleStop(args as { instanceId?: string }));
-      case 'list':
-        return withMonitoring(name, args, () => handlers.handleList());
+        return withMonitoring(name, args, () => handlers.handleStop());
       case 'rebuild':
         return withMonitoring(name, args, () =>
-          handlers.handleRebuild(args as unknown as RebuildOptions & { instanceId?: string }));
+          handlers.handleRebuild(args as Parameters<typeof handlers.handleRebuild>[0])
+        );
       case 'get_status':
-        return withMonitoring(name, args, () =>
-          handlers.handleGetStatus(args as { instanceId?: string }));
+        return withMonitoring(name, args, () => handlers.handleGetStatus());
       case 'hot_reload':
-        return withMonitoring(name, args, () =>
-          handlers.handleHotReload(args as { instanceId?: string }));
+        return withMonitoring(name, args, () => handlers.handleHotReload());
       case 'hot_restart':
-        return withMonitoring(name, args, () =>
-          handlers.handleHotRestart(args as { instanceId?: string }));
+        return withMonitoring(name, args, () => handlers.handleHotRestart());
       case 'get_logs':
         return withMonitoring(name, args, () =>
-          handlers.handleGetLogs(args as { maxLines?: number; instanceId?: string }));
+          handlers.handleGetLogs(args as { maxLines?: number })
+        );
       case 'get_errors':
-        return withMonitoring(name, args, () =>
-          handlers.handleGetErrors(args as { instanceId?: string }));
+        return withMonitoring(name, args, () => handlers.handleGetErrors());
 
       // Interaction Tree
       case 'get_tree':
         return withMonitoring(name, args, () =>
-          handlers.handleGetTree(args as Parameters<typeof handlers.handleGetTree>[0]));
+          handlers.handleGetTree(args as Parameters<typeof handlers.handleGetTree>[0])
+        );
       case 'tap':
-        return withMonitoring(name, args, () =>
-          handlers.handleTap(args as { id: string; instanceId?: string }));
+        return withMonitoring(name, args, () => handlers.handleTap(args as { id: string }));
       case 'double_tap':
-        return withMonitoring(name, args, () =>
-          handlers.handleDoubleTap(args as { id: string; instanceId?: string }));
+        return withMonitoring(name, args, () => handlers.handleDoubleTap(args as { id: string }));
       case 'long_press':
-        return withMonitoring(name, args, () =>
-          handlers.handleLongPress(args as { id: string; instanceId?: string }));
+        return withMonitoring(name, args, () => handlers.handleLongPress(args as { id: string }));
       case 'enter_text':
         return withMonitoring(name, args, () =>
-          handlers.handleEnterText(args as { id: string; text: string; instanceId?: string }));
+          handlers.handleEnterText(args as { id: string; text: string })
+        );
       case 'clear_text':
-        return withMonitoring(name, args, () =>
-          handlers.handleClearText(args as { id: string; instanceId?: string }));
+        return withMonitoring(name, args, () => handlers.handleClearText(args as { id: string }));
       case 'scroll':
         return withMonitoring(name, args, () =>
-          handlers.handleScroll(args as { id: string; dx?: number; dy?: number; instanceId?: string }));
+          handlers.handleScroll(args as { id: string; dx?: number; dy?: number })
+        );
       case 'drag':
         return withMonitoring(name, args, () =>
-          handlers.handleDrag(args as { id: string; dx?: number; dy?: number; instanceId?: string }));
+          handlers.handleDrag(args as { id: string; dx?: number; dy?: number })
+        );
       case 'scroll_into_view':
         return withMonitoring(name, args, () =>
-          handlers.handleScrollIntoView(args as { id: string; alignment?: number; instanceId?: string }));
+          handlers.handleScrollIntoView(args as { id: string; alignment?: number })
+        );
       case 'wait_for':
         return withMonitoring(name, args, () =>
-          handlers.handleWaitFor(args as Parameters<typeof handlers.handleWaitFor>[0]));
+          handlers.handleWaitFor(args as Parameters<typeof handlers.handleWaitFor>[0])
+        );
       case 'get_state':
-        return withMonitoring(name, args, () =>
-          handlers.handleGetState(args as { id: string; instanceId?: string }));
+        return withMonitoring(name, args, () => handlers.handleGetState(args as { id: string }));
       case 'execute_action':
         return withMonitoring(name, args, () =>
-          handlers.handleExecuteAction(args as Parameters<typeof handlers.handleExecuteAction>[0]));
+          handlers.handleExecuteAction(args as Parameters<typeof handlers.handleExecuteAction>[0])
+        );
       case 'batch':
         return withMonitoring(name, args, () =>
-          handlers.handleBatch(args as Parameters<typeof handlers.handleBatch>[0]));
+          handlers.handleBatch(args as Parameters<typeof handlers.handleBatch>[0])
+        );
 
       default:
         return {

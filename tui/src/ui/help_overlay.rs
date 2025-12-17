@@ -1,12 +1,14 @@
+use crate::theme::theme;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
 
 pub fn render(frame: &mut Frame) {
+    let t = theme();
     let area = centered_rect(60, 70, frame.area());
 
     frame.render_widget(Clear, area);
@@ -56,7 +58,7 @@ pub fn render(frame: &mut Frame) {
         lines.push(Line::from(Span::styled(
             format!("  {}", section_name),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(t.title)
                 .add_modifier(Modifier::BOLD),
         )));
 
@@ -65,9 +67,9 @@ pub fn render(frame: &mut Frame) {
                 Span::raw("    "),
                 Span::styled(
                     format!("{:<14}", key),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(t.text_highlight),
                 ),
-                Span::styled(desc, Style::default().fg(Color::White)),
+                Span::styled(desc, Style::default().fg(t.text)),
             ]));
         }
     }
@@ -75,13 +77,13 @@ pub fn render(frame: &mut Frame) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "  Press Esc or ? to close",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(t.text_dim),
     )));
 
     let block = Block::default()
         .title(" Help ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(t.title));
 
     let paragraph = Paragraph::new(lines).block(block);
 

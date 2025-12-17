@@ -1,2 +1,2 @@
 export { registerRawTools } from './raw.js';
-export { registerAgentTools, AGENT_SYSTEM_PROMPT } from './agent.js';
+export { registerAgentTools } from './agent.js';

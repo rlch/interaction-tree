@@ -249,12 +249,4 @@ export class VMServiceClient {
         }
     }
 }
-// Singleton instance for the server
-let vmClient = null;
-export function getVMClient() {
-    if (!vmClient) {
-        vmClient = new VMServiceClient();
-    }
-    return vmClient;
-}
 //# sourceMappingURL=client.js.map

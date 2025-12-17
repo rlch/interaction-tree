@@ -10,17 +10,16 @@ import {
   createSdkMcpServer,
   tool,
   type Options,
-  type SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import type { AgentConfig } from '../types/agent.js';
-import { getVMClient } from '../vm/client.js';
+import type { VMServiceClient } from '../vm/client.js';
 import type { BatchStep } from '../types/interaction-tree.js';
 
 export interface AgentExecutorConfig {
   /** Max turns before giving up */
   maxTurns: number;
-  /** Working directory */
+  /** Working directory (session's projectPath) */
   cwd: string;
   /** Model to use (optional, defaults to SDK default) */
   model?: string;
@@ -60,34 +59,15 @@ function parseAskContext(content: string): {
 
 /**
  * Create the interaction tree MCP server for the agent.
+ * Takes VMClient as parameter so it's bound to a specific session.
  */
-function createInteractionTreeMcpServer() {
-  const connectTool = tool(
-    'connect',
-    'Connect to a Flutter app via its VM service WebSocket URI.',
-    { uri: z.string().describe('The VM service WebSocket URI (e.g., ws://127.0.0.1:12345/xxx=/ws)') },
-    async (args) => {
-      const client = getVMClient();
-      try {
-        await client.connect(args.uri);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ connected: true, uri: args.uri }, null, 2) }],
-        };
-      } catch (err) {
-        return {
-          content: [{ type: 'text' as const, text: `Error connecting: ${err instanceof Error ? err.message : String(err)}` }],
-        };
-      }
-    }
-  );
-
+function createInteractionTreeMcpServer(vmClient: VMServiceClient) {
   const getStatusTool = tool(
     'getStatus',
     'Get the current connection status.',
     {},
     async () => {
-      const client = getVMClient();
-      const status = await client.getStatus();
+      const status = await vmClient.getStatus();
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(status, null, 2) }],
       };
@@ -102,14 +82,13 @@ function createInteractionTreeMcpServer() {
       includeState: z.boolean().optional(),
     },
     async (args) => {
-      const client = getVMClient();
-      if (!client.isConnected) {
+      if (!vmClient.isConnected) {
         return {
-          content: [{ type: 'text' as const, text: 'Error: Not connected to Flutter app. Use connect tool first.' }],
+          content: [{ type: 'text' as const, text: 'Error: Not connected to Flutter app.' }],
         };
       }
       try {
-        const tree = await client.getTree({
+        const tree = await vmClient.getTree({
           includeBounds: args.includeBounds,
           includeWidgetType: true,
           includeState: args.includeState,
@@ -134,14 +113,13 @@ function createInteractionTreeMcpServer() {
       args: z.record(z.unknown()).optional(),
     },
     async (args) => {
-      const client = getVMClient();
-      if (!client.isConnected) {
+      if (!vmClient.isConnected) {
         return {
-          content: [{ type: 'text' as const, text: 'Error: Not connected to Flutter app. Use connect tool first.' }],
+          content: [{ type: 'text' as const, text: 'Error: Not connected to Flutter app.' }],
         };
       }
       try {
-        const result = await client.execute(args.id, args.interaction, args.args);
+        const result = await vmClient.execute(args.id, args.interaction, args.args);
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
         };
@@ -158,14 +136,13 @@ function createInteractionTreeMcpServer() {
     'Get the current state of a widget.',
     { id: z.string() },
     async (args) => {
-      const client = getVMClient();
-      if (!client.isConnected) {
+      if (!vmClient.isConnected) {
         return {
-          content: [{ type: 'text' as const, text: 'Error: Not connected to Flutter app. Use connect tool first.' }],
+          content: [{ type: 'text' as const, text: 'Error: Not connected to Flutter app.' }],
         };
       }
       try {
-        const state = await client.getState(args.id);
+        const state = await vmClient.getState(args.id);
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(state, null, 2) }],
         };
@@ -197,14 +174,13 @@ function createInteractionTreeMcpServer() {
       ),
     },
     async (args) => {
-      const client = getVMClient();
-      if (!client.isConnected) {
+      if (!vmClient.isConnected) {
         return {
-          content: [{ type: 'text' as const, text: 'Error: Not connected to Flutter app. Use connect tool first.' }],
+          content: [{ type: 'text' as const, text: 'Error: Not connected to Flutter app.' }],
         };
       }
       try {
-        const result = await client.batch(args.steps as BatchStep[]);
+        const result = await vmClient.batch(args.steps as BatchStep[]);
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
         };
@@ -217,14 +193,13 @@ function createInteractionTreeMcpServer() {
   );
 
   const hotReloadTool = tool('hotReload', 'Hot reload the app to apply code changes.', {}, async () => {
-    const client = getVMClient();
-    if (!client.isConnected) {
+    if (!vmClient.isConnected) {
       return {
-        content: [{ type: 'text' as const, text: 'Error: Not connected to Flutter app. Use connect tool first.' }],
+        content: [{ type: 'text' as const, text: 'Error: Not connected to Flutter app.' }],
       };
     }
     try {
-      const result = await client.hotReload();
+      const result = await vmClient.hotReload();
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
       };
@@ -236,14 +211,13 @@ function createInteractionTreeMcpServer() {
   });
 
   const hotRestartTool = tool('hotRestart', 'Hot restart the app (full restart, loses state).', {}, async () => {
-    const client = getVMClient();
-    if (!client.isConnected) {
+    if (!vmClient.isConnected) {
       return {
-        content: [{ type: 'text' as const, text: 'Error: Not connected to Flutter app. Use connect tool first.' }],
+        content: [{ type: 'text' as const, text: 'Error: Not connected to Flutter app.' }],
       };
     }
     try {
-      const result = await client.hotRestart();
+      const result = await vmClient.hotRestart();
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
       };
@@ -256,17 +230,16 @@ function createInteractionTreeMcpServer() {
 
   const getLogsTool = tool(
     'getLogs',
-    'Get recent logs from the Flutter app (note: may return empty if log collection not implemented).',
+    'Get recent logs from the Flutter app.',
     { since: z.string().optional() },
     async (args) => {
-      const client = getVMClient();
-      if (!client.isConnected) {
+      if (!vmClient.isConnected) {
         return {
-          content: [{ type: 'text' as const, text: 'Error: Not connected to Flutter app. Use connect tool first.' }],
+          content: [{ type: 'text' as const, text: 'Error: Not connected to Flutter app.' }],
         };
       }
       try {
-        const logs = await client.getLogs(args.since);
+        const logs = await vmClient.getLogs(args.since);
         return {
           content: [{ type: 'text' as const, text: JSON.stringify({ logs }, null, 2) }],
         };
@@ -278,15 +251,14 @@ function createInteractionTreeMcpServer() {
     }
   );
 
-  const getErrorsTool = tool('getErrors', 'Get runtime errors (note: may return empty if error collection not implemented).', {}, async () => {
-    const client = getVMClient();
-    if (!client.isConnected) {
+  const getErrorsTool = tool('getErrors', 'Get runtime errors from the app.', {}, async () => {
+    if (!vmClient.isConnected) {
       return {
-        content: [{ type: 'text' as const, text: 'Error: Not connected to Flutter app. Use connect tool first.' }],
+        content: [{ type: 'text' as const, text: 'Error: Not connected to Flutter app.' }],
       };
     }
     try {
-      const errors = await client.getRuntimeErrors();
+      const errors = await vmClient.getRuntimeErrors();
       return {
         content: [{ type: 'text' as const, text: JSON.stringify({ errors }, null, 2) }],
       };
@@ -301,7 +273,6 @@ function createInteractionTreeMcpServer() {
     name: 'interaction-tree',
     version: '0.1.0',
     tools: [
-      connectTool,
       getStatusTool,
       getTreeTool,
       executeTool,
@@ -316,14 +287,15 @@ function createInteractionTreeMcpServer() {
 }
 
 /**
- * Execute an agent with the interaction tree tools.
+ * Execute an agent with the interaction tree tools bound to a specific VMClient.
  */
 export async function executeAgent(
   systemPrompt: string,
   userMessage: string,
-  config: AgentExecutorConfig
+  config: AgentExecutorConfig,
+  vmClient: VMServiceClient
 ): Promise<AgentExecutionResult> {
-  const mcpServer = createInteractionTreeMcpServer();
+  const mcpServer = createInteractionTreeMcpServer(vmClient);
 
   const options: Options = {
     cwd: config.cwd,
@@ -333,7 +305,6 @@ export async function executeAgent(
       'interaction-tree': mcpServer,
     },
     allowedTools: [
-      'mcp__interaction-tree__connect',
       'mcp__interaction-tree__getStatus',
       'mcp__interaction-tree__getTree',
       'mcp__interaction-tree__execute',
@@ -407,11 +378,12 @@ export async function executeAgent(
  * Get the default agent config.
  */
 export function getDefaultAgentConfig(
+  cwd: string,
   overrides?: Partial<AgentConfig>
 ): AgentExecutorConfig {
   return {
     maxTurns: overrides?.maxTurns ?? 10,
-    cwd: process.cwd(),
+    cwd,
     model: overrides?.model,
   };
 }

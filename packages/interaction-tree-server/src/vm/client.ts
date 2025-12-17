@@ -345,12 +345,3 @@ export class VMServiceClient {
   }
 }
 
-// Singleton instance for the server
-let vmClient: VMServiceClient | null = null;
-
-export function getVMClient(): VMServiceClient {
-  if (!vmClient) {
-    vmClient = new VMServiceClient();
-  }
-  return vmClient;
-}

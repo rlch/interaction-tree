@@ -1,14 +1,16 @@
 use crate::app::App;
+use crate::theme::theme;
 use crate::ws::protocol::MonitoringEvent;
 use ratatui::{
     layout::Rect,
-    style::{Color, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
+    let t = theme();
     let events: Vec<&MonitoringEvent> = app.filtered_events().collect();
     let event_count = events.len();
 
@@ -32,36 +34,38 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(t.border));
 
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
 }
 
 fn format_event(event: &MonitoringEvent) -> Line<'static> {
+    let t = theme();
+
     let source_color = match event.source.to_lowercase().as_str() {
-        s if s.contains("flutter") => Color::Green,
-        s if s.contains("agent") => Color::Blue,
-        s if s.contains("vm") => Color::Yellow,
-        s if s.contains("mcp") => Color::Cyan,
-        _ => Color::White,
+        s if s.contains("flutter") => t.source_flutter,
+        s if s.contains("agent") => t.source_agent,
+        s if s.contains("vm") => t.source_vm,
+        s if s.contains("mcp") => t.source_mcp,
+        _ => t.text,
     };
 
     let (icon, icon_color) = match event.event_type.to_lowercase().as_str() {
-        "agent_success" => ("✓", Color::Green),
-        "agent_needs_context" => ("?", Color::Yellow),
-        "agent_error" => ("✗", Color::Red),
-        t if t.contains("error") => ("✗", Color::Red),
-        t if t.contains("warn") => ("⚠", Color::Yellow),
-        t if t.contains("debug") => ("○", Color::DarkGray),
-        _ => ("•", Color::White),
+        "agent_success" => ("✓", t.success),
+        "agent_needs_context" => ("?", t.warning),
+        "agent_error" => ("✗", t.error),
+        t_str if t_str.contains("error") => ("✗", t.error),
+        t_str if t_str.contains("warn") => ("⚠", t.warning),
+        t_str if t_str.contains("debug") => ("○", t.text_dim),
+        _ => ("•", t.text),
     };
 
     let ts = format_timestamp(&event.ts);
     let payload_summary = format_agent_payload(event).unwrap_or_else(|| summarize_payload(&event.payload));
 
     Line::from(vec![
-        Span::styled(format!("{} ", ts), Style::default().fg(Color::DarkGray)),
+        Span::styled(format!("{} ", ts), Style::default().fg(t.text_dim)),
         Span::styled(format!("{} ", icon), Style::default().fg(icon_color)),
         Span::styled(
             format!("{:8} ", truncate(&event.source, 8)),
@@ -69,9 +73,9 @@ fn format_event(event: &MonitoringEvent) -> Line<'static> {
         ),
         Span::styled(
             format!("{:12} ", truncate(&event.event_type, 12)),
-            Style::default().fg(Color::White),
+            Style::default().fg(t.text),
         ),
-        Span::styled(payload_summary, Style::default().fg(Color::DarkGray)),
+        Span::styled(payload_summary, Style::default().fg(t.text_dim)),
     ])
 }
 

@@ -3,14 +3,14 @@
  */
 import { WebSocketServer, WebSocket } from 'ws';
 import { getMonitor } from './monitor.js';
-import { getFlutterProcessManager } from '../flutter/process-manager.js';
-import { getVMClient } from '../vm/client.js';
+import { getSessionManager } from '../session/index.js';
 let wss = null;
 let commandHandler = null;
 let agentHandler = null;
 async function handleCommand(cmd, ws) {
-    const manager = getFlutterProcessManager();
-    const vmClient = getVMClient();
+    const manager = getSessionManager();
+    const session = manager.getActive();
+    const vmClient = session?.app?.vmClient;
     const sendResponse = (response) => {
         ws.send(JSON.stringify({
             type: 'command_response',
@@ -21,7 +21,7 @@ async function handleCommand(cmd, ws) {
     try {
         switch (cmd.action) {
             case 'hot_reload': {
-                if (!manager.isRunning) {
+                if (!session?.app || session.app.status !== 'running') {
                     sendResponse({ success: false, error: 'No app running' });
                     return;
                 }
@@ -30,7 +30,7 @@ async function handleCommand(cmd, ws) {
                 break;
             }
             case 'hot_restart': {
-                if (!manager.isRunning) {
+                if (!session?.app || session.app.status !== 'running') {
                     sendResponse({ success: false, error: 'No app running' });
                     return;
                 }
@@ -39,7 +39,7 @@ async function handleCommand(cmd, ws) {
                 break;
             }
             case 'stop': {
-                await manager.stop();
+                await manager.stopApp();
                 sendResponse({ success: true });
                 break;
             }
@@ -48,32 +48,43 @@ async function handleCommand(cmd, ws) {
                     sendResponse({ success: false, error: 'No key specified' });
                     return;
                 }
-                manager.sendCommand(cmd.key);
-                sendResponse({ success: true });
+                if (session?.app?.process?.stdin) {
+                    session.app.process.stdin.write(cmd.key);
+                    sendResponse({ success: true });
+                }
+                else {
+                    sendResponse({ success: false, error: 'No app process available' });
+                }
                 break;
             }
             case 'get_status': {
-                const state = manager.currentState;
                 sendResponse({
                     success: true,
                     data: {
-                        process: state ? {
-                            status: state.status,
-                            projectPath: state.projectPath,
-                            device: state.device,
-                            vmServiceUri: state.vmServiceUri,
-                            pid: state.pid,
-                        } : null,
+                        session: session
+                            ? {
+                                id: session.id,
+                                name: session.name,
+                                projectPath: session.projectPath,
+                            }
+                            : null,
+                        app: session?.app
+                            ? {
+                                status: session.app.status,
+                                vmServiceUri: session.app.vmServiceUri,
+                                pid: session.app.pid,
+                            }
+                            : null,
                         vmConnection: {
-                            connected: vmClient.isConnected,
-                            uri: vmClient.connectionUri,
+                            connected: vmClient?.isConnected ?? false,
+                            uri: vmClient?.connectionUri,
                         },
                     },
                 });
                 break;
             }
             case 'get_tree': {
-                if (!vmClient.isConnected) {
+                if (!vmClient?.isConnected) {
                     sendResponse({ success: false, error: 'Not connected to VM' });
                     return;
                 }

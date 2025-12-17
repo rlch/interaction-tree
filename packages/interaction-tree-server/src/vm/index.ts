@@ -1,2 +1,2 @@
-export { VMServiceClient, getVMClient } from './client.js';
+export { VMServiceClient } from './client.js';
 export * from './protocol.js';

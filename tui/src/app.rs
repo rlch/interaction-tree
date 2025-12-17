@@ -1,8 +1,11 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 
-use crate::ws::protocol::{AgentResponse, AgentStatus, CommandResponse, MonitoringEvent};
+use tui_textarea::TextArea;
+use tui_tree_widget::TreeState;
 
-// Interaction tree data structures (Phase 3)
+use crate::project::ProjectInfo;
+use crate::ws::protocol::{AgentResponse, AgentStatus, CommandResponse, Instance, MonitoringEvent};
+
 #[derive(Debug, Clone, Default)]
 pub struct InteractionTree {
     pub nodes: Vec<TreeNode>,
@@ -46,6 +49,7 @@ pub enum Mode {
     Input,
     Help,
     Confirm(ConfirmAction),
+    InstancePicker,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,25 +59,67 @@ pub enum ConfirmAction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pane {
-    Events,
+    Content,
     Tree,
     Input,
 }
 
-pub struct App {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ContentTab {
+    #[default]
+    Logs,
+    Interactions,
+    Ai,
+}
+
+impl ContentTab {
+    pub fn next(self) -> Self {
+        match self {
+            ContentTab::Logs => ContentTab::Interactions,
+            ContentTab::Interactions => ContentTab::Ai,
+            ContentTab::Ai => ContentTab::Logs,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            ContentTab::Logs => ContentTab::Ai,
+            ContentTab::Interactions => ContentTab::Logs,
+            ContentTab::Ai => ContentTab::Interactions,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ContentTab::Logs => "Logs",
+            ContentTab::Interactions => "Interactions",
+            ContentTab::Ai => "AI",
+        }
+    }
+}
+
+pub struct App<'a> {
     pub ws_state: WsState,
     pub server_uri: String,
-    pub instance_id: Option<String>,
+
+    pub project: ProjectInfo,
+    pub instances: Vec<Instance>,
+    pub selected_instance: Option<String>,
+    pub instance_picker_index: usize,
 
     pub app_status: AppStatus,
 
-    pub events: VecDeque<MonitoringEvent>,
+    pub logs: VecDeque<LogEntry>,
+    pub interactions: VecDeque<MonitoringEvent>,
+    pub ai_events: VecDeque<MonitoringEvent>,
     pub max_events: usize,
 
     pub mode: Mode,
     pub input_buffer: String,
+    pub textarea: TextArea<'a>,
     pub filter: Option<String>,
     pub selected_pane: Pane,
+    pub content_tab: ContentTab,
     pub scroll_offset: usize,
 
     pub conversation_id: Option<String>,
@@ -82,31 +128,68 @@ pub struct App {
     pub pending_intent: Option<String>,
     pub last_agent_error: Option<String>,
 
-    // Interaction tree (Phase 3)
     pub tree: Option<InteractionTree>,
-    pub tree_expanded: HashSet<String>,
-    pub tree_scroll_offset: usize,
-    pub tree_selected: Option<String>,
+    pub tree_state: TreeState<String>,
+
+    pub throbber_state: throbber_widgets_tui::ThrobberState,
 
     pub should_quit: bool,
 }
 
-impl App {
-    pub fn new(uri: String, max_events: usize) -> Self {
+#[derive(Debug, Clone)]
+pub struct LogEntry {
+    pub ts: String,
+    pub level: LogLevel,
+    pub message: String,
+    pub ansi_spans: Option<Vec<AnsiSpan>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogLevel {
+    Debug,
+    Info,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone)]
+pub struct AnsiSpan {
+    pub text: String,
+    pub fg: Option<ratatui::style::Color>,
+    pub bg: Option<ratatui::style::Color>,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+}
+
+impl<'a> App<'a> {
+    pub fn new(uri: String, max_events: usize, project: ProjectInfo) -> Self {
+        let mut textarea = TextArea::default();
+        textarea.set_cursor_line_style(ratatui::style::Style::default());
+        textarea.set_placeholder_text("Type an intent or command...");
+
         Self {
             ws_state: WsState::Disconnected,
             server_uri: uri,
-            instance_id: None,
+
+            project,
+            instances: Vec::new(),
+            selected_instance: None,
+            instance_picker_index: 0,
 
             app_status: AppStatus::Unknown,
 
-            events: VecDeque::with_capacity(max_events),
+            logs: VecDeque::with_capacity(max_events),
+            interactions: VecDeque::with_capacity(max_events),
+            ai_events: VecDeque::with_capacity(max_events),
             max_events,
 
             mode: Mode::Normal,
             input_buffer: String::new(),
+            textarea,
             filter: None,
-            selected_pane: Pane::Events,
+            selected_pane: Pane::Content,
+            content_tab: ContentTab::default(),
             scroll_offset: 0,
 
             conversation_id: None,
@@ -116,9 +199,9 @@ impl App {
             last_agent_error: None,
 
             tree: None,
-            tree_expanded: HashSet::new(),
-            tree_scroll_offset: 0,
-            tree_selected: None,
+            tree_state: TreeState::default(),
+
+            throbber_state: throbber_widgets_tui::ThrobberState::default(),
 
             should_quit: false,
         }
@@ -126,50 +209,83 @@ impl App {
 
     pub fn set_tree(&mut self, tree: InteractionTree) {
         self.tree = Some(tree);
+        self.tree_state = TreeState::default();
     }
 
-    pub fn toggle_tree_node(&mut self, id: &str) {
-        if self.tree_expanded.contains(id) {
-            self.tree_expanded.remove(id);
-        } else {
-            self.tree_expanded.insert(id.to_string());
+    pub fn push_log(&mut self, entry: LogEntry) {
+        if self.logs.len() >= self.max_events {
+            self.logs.pop_front();
         }
+        self.logs.push_back(entry);
     }
 
-    pub fn tree_visible_nodes(&self) -> Vec<(usize, &TreeNode)> {
-        let Some(ref tree) = self.tree else {
-            return Vec::new();
-        };
-
-        let mut result = Vec::new();
-        self.collect_visible_nodes(&tree.nodes, 0, &mut result);
-        result
-    }
-
-    fn collect_visible_nodes<'a>(
-        &'a self,
-        nodes: &'a [TreeNode],
-        depth: usize,
-        result: &mut Vec<(usize, &'a TreeNode)>,
-    ) {
-        for node in nodes {
-            result.push((depth, node));
-            if self.tree_expanded.contains(&node.id) {
-                self.collect_visible_nodes(&node.children, depth + 1, result);
-            }
+    pub fn push_interaction(&mut self, event: MonitoringEvent) {
+        if self.interactions.len() >= self.max_events {
+            self.interactions.pop_front();
         }
+        self.interactions.push_back(event);
+    }
+
+    pub fn push_ai_event(&mut self, event: MonitoringEvent) {
+        if self.ai_events.len() >= self.max_events {
+            self.ai_events.pop_front();
+        }
+        self.ai_events.push_back(event);
     }
 
     pub fn push_event(&mut self, event: MonitoringEvent) {
-        if self.events.len() >= self.max_events {
-            self.events.pop_front();
+        let source = event.source.to_lowercase();
+        let event_type = event.event_type.to_lowercase();
+
+        if source.contains("agent") || event_type.starts_with("agent_") || event_type.contains("tool") {
+            self.push_ai_event(event);
+        } else if source.contains("tree") || event_type.contains("interaction") {
+            self.push_interaction(event);
+        } else {
+            let entry = LogEntry {
+                ts: event.ts.clone(),
+                level: if event_type.contains("error") {
+                    LogLevel::Error
+                } else if event_type.contains("warn") {
+                    LogLevel::Warning
+                } else if event_type.contains("debug") {
+                    LogLevel::Debug
+                } else {
+                    LogLevel::Info
+                },
+                message: format!("[{}] {}", event.source, summarize_payload(&event.payload)),
+                ansi_spans: None,
+            };
+            self.push_log(entry);
         }
-        self.events.push_back(event);
     }
 
-    pub fn filtered_events(&self) -> impl Iterator<Item = &MonitoringEvent> {
+    pub fn filtered_logs(&self) -> impl Iterator<Item = &LogEntry> {
         let filter = self.filter.clone();
-        self.events.iter().filter(move |e| {
+        self.logs.iter().filter(move |e| {
+            let Some(ref pattern) = filter else {
+                return true;
+            };
+            let pattern_lower = pattern.to_lowercase();
+            e.message.to_lowercase().contains(&pattern_lower)
+        })
+    }
+
+    pub fn filtered_interactions(&self) -> impl Iterator<Item = &MonitoringEvent> {
+        let filter = self.filter.clone();
+        self.interactions.iter().filter(move |e| {
+            let Some(ref pattern) = filter else {
+                return true;
+            };
+            let pattern_lower = pattern.to_lowercase();
+            e.source.to_lowercase().contains(&pattern_lower)
+                || e.event_type.to_lowercase().contains(&pattern_lower)
+        })
+    }
+
+    pub fn filtered_ai_events(&self) -> impl Iterator<Item = &MonitoringEvent> {
+        let filter = self.filter.clone();
+        self.ai_events.iter().filter(move |e| {
             let Some(ref pattern) = filter else {
                 return true;
             };
@@ -273,51 +389,128 @@ impl App {
     }
 
     pub fn scroll_down(&mut self) {
-        let event_count = self.filtered_events().count();
+        let event_count = match self.content_tab {
+            ContentTab::Logs => self.filtered_logs().count(),
+            ContentTab::Interactions => self.filtered_interactions().count(),
+            ContentTab::Ai => self.filtered_ai_events().count(),
+        };
         if event_count > 0 && self.scroll_offset < event_count - 1 {
             self.scroll_offset += 1;
         }
     }
 
-    pub fn tree_scroll_up(&mut self) {
-        self.tree_scroll_offset = self.tree_scroll_offset.saturating_sub(1);
+    pub fn tree_up(&mut self) {
+        self.tree_state.key_up();
     }
 
-    pub fn tree_scroll_down(&mut self) {
-        let visible_count = self.tree_visible_nodes().len();
-        if visible_count > 0 && self.tree_scroll_offset < visible_count - 1 {
-            self.tree_scroll_offset += 1;
-        }
+    pub fn tree_down(&mut self) {
+        self.tree_state.key_down();
     }
 
-    pub fn tree_toggle_selected(&mut self) {
-        if let Some(ref selected) = self.tree_selected.clone() {
-            self.toggle_tree_node(selected);
-        } else {
-            let visible = self.tree_visible_nodes();
-            if let Some((_, node)) = visible.get(self.tree_scroll_offset) {
-                let id = node.id.clone();
-                self.toggle_tree_node(&id);
-            }
-        }
+    pub fn tree_toggle(&mut self) {
+        self.tree_state.toggle_selected();
     }
 
-    pub fn tree_select_at_offset(&mut self) {
-        let visible = self.tree_visible_nodes();
-        if let Some((_, node)) = visible.get(self.tree_scroll_offset) {
-            self.tree_selected = Some(node.id.clone());
-        }
+    pub fn tree_left(&mut self) {
+        self.tree_state.key_left();
+    }
+
+    pub fn tree_right(&mut self) {
+        self.tree_state.key_right();
+    }
+
+    pub fn tree_selected(&self) -> Option<&String> {
+        self.tree_state.selected().last()
     }
 
     pub fn clear_events(&mut self) {
-        self.events.clear();
+        self.logs.clear();
+        self.interactions.clear();
+        self.ai_events.clear();
         self.scroll_offset = 0;
+    }
+
+    pub fn set_instances(&mut self, instances: Vec<Instance>) {
+        self.instances = instances;
+        if self.selected_instance.is_none() && !self.instances.is_empty() {
+            self.selected_instance = Some(self.instances[0].instance_id.clone());
+        }
+    }
+
+    pub fn instance_picker_up(&mut self) {
+        if self.instance_picker_index > 0 {
+            self.instance_picker_index -= 1;
+        }
+    }
+
+    pub fn instance_picker_down(&mut self) {
+        if self.instance_picker_index < self.instances.len().saturating_sub(1) {
+            self.instance_picker_index += 1;
+        }
+    }
+
+    pub fn instance_picker_select(&mut self) {
+        if let Some(instance) = self.instances.get(self.instance_picker_index) {
+            self.selected_instance = Some(instance.instance_id.clone());
+        }
+        self.mode = Mode::Normal;
+    }
+
+    pub fn next_tab(&mut self) {
+        self.content_tab = self.content_tab.next();
+        self.scroll_offset = 0;
+    }
+
+    pub fn prev_tab(&mut self) {
+        self.content_tab = self.content_tab.prev();
+        self.scroll_offset = 0;
+    }
+
+    pub fn tick(&mut self) {
+        self.throbber_state.calc_next();
+    }
+}
+
+fn summarize_payload(payload: &serde_json::Value) -> String {
+    match payload {
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::String(s) => truncate(s, 80),
+        serde_json::Value::Object(map) => {
+            if let Some(msg) = map.get("message").and_then(|v| v.as_str()) {
+                return truncate(msg, 80);
+            }
+            let keys: Vec<&str> = map.keys().map(|k| k.as_str()).take(3).collect();
+            if keys.is_empty() {
+                "{}".to_string()
+            } else {
+                format!("{{{}}}", keys.join(", "))
+            }
+        }
+        serde_json::Value::Array(arr) => format!("[{} items]", arr.len()),
+        other => truncate(&other.to_string(), 80),
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s.chars().take(max - 1).collect::<String>())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn test_project() -> ProjectInfo {
+        ProjectInfo {
+            path: PathBuf::from("/test/project"),
+            name: "test_app".to_string(),
+            is_flutter: true,
+        }
+    }
 
     fn make_event(source: &str, event_type: &str) -> MonitoringEvent {
         MonitoringEvent {
@@ -330,7 +523,7 @@ mod tests {
 
     #[test]
     fn test_new_app() {
-        let app = App::new("ws://localhost:9000".to_string(), 100);
+        let app = App::new("ws://localhost:9000".to_string(), 100, test_project());
         assert_eq!(app.server_uri, "ws://localhost:9000");
         assert_eq!(app.max_events, 100);
         assert_eq!(app.ws_state, WsState::Disconnected);
@@ -339,101 +532,48 @@ mod tests {
     }
 
     #[test]
-    fn test_push_event_trims_to_max() {
-        let mut app = App::new("ws://localhost:9000".to_string(), 3);
-        app.push_event(make_event("a", "t1"));
-        app.push_event(make_event("b", "t2"));
-        app.push_event(make_event("c", "t3"));
-        app.push_event(make_event("d", "t4"));
-
-        assert_eq!(app.events.len(), 3);
-        assert_eq!(app.events[0].source, "b");
-        assert_eq!(app.events[2].source, "d");
-    }
-
-    #[test]
-    fn test_filtered_events_no_filter() {
-        let mut app = App::new("ws://localhost:9000".to_string(), 10);
-        app.push_event(make_event("flutter", "log"));
-        app.push_event(make_event("agent", "tool"));
-
-        let filtered: Vec<_> = app.filtered_events().collect();
-        assert_eq!(filtered.len(), 2);
-    }
-
-    #[test]
-    fn test_filtered_events_by_source() {
-        let mut app = App::new("ws://localhost:9000".to_string(), 10);
-        app.push_event(make_event("flutter", "log"));
-        app.push_event(make_event("agent", "tool"));
-        app.push_event(make_event("flutter", "error"));
-        app.filter = Some("flutter".to_string());
-
-        let filtered: Vec<_> = app.filtered_events().collect();
-        assert_eq!(filtered.len(), 2);
-        assert!(filtered.iter().all(|e| e.source == "flutter"));
-    }
-
-    #[test]
-    fn test_filtered_events_by_type() {
-        let mut app = App::new("ws://localhost:9000".to_string(), 10);
-        app.push_event(make_event("flutter", "log"));
-        app.push_event(make_event("agent", "tool_call"));
-        app.push_event(make_event("agent", "tool_result"));
-        app.filter = Some("tool".to_string());
-
-        let filtered: Vec<_> = app.filtered_events().collect();
-        assert_eq!(filtered.len(), 2);
-    }
-
-    #[test]
-    fn test_filtered_events_case_insensitive() {
-        let mut app = App::new("ws://localhost:9000".to_string(), 10);
-        app.push_event(make_event("Flutter", "LOG"));
-        app.filter = Some("flutter".to_string());
-
-        let filtered: Vec<_> = app.filtered_events().collect();
-        assert_eq!(filtered.len(), 1);
-    }
-
-    #[test]
-    fn test_scroll() {
-        let mut app = App::new("ws://localhost:9000".to_string(), 10);
-        for i in 0..5 {
-            app.push_event(make_event(&format!("s{}", i), "t"));
+    fn test_push_log_trims_to_max() {
+        let mut app = App::new("ws://localhost:9000".to_string(), 3, test_project());
+        for i in 0..4 {
+            app.push_log(LogEntry {
+                ts: format!("2024-01-01T00:00:0{}Z", i),
+                level: LogLevel::Info,
+                message: format!("msg{}", i),
+                ansi_spans: None,
+            });
         }
 
-        assert_eq!(app.scroll_offset, 0);
-        app.scroll_down();
-        assert_eq!(app.scroll_offset, 1);
-        app.scroll_down();
-        app.scroll_down();
-        app.scroll_down();
-        assert_eq!(app.scroll_offset, 4);
-        app.scroll_down();
-        assert_eq!(app.scroll_offset, 4);
+        assert_eq!(app.logs.len(), 3);
+        assert!(app.logs[0].message.contains("msg1"));
+        assert!(app.logs[2].message.contains("msg3"));
+    }
 
-        app.scroll_up();
-        assert_eq!(app.scroll_offset, 3);
-        app.scroll_offset = 0;
-        app.scroll_up();
-        assert_eq!(app.scroll_offset, 0);
+    #[test]
+    fn test_content_tab_cycling() {
+        assert_eq!(ContentTab::Logs.next(), ContentTab::Interactions);
+        assert_eq!(ContentTab::Interactions.next(), ContentTab::Ai);
+        assert_eq!(ContentTab::Ai.next(), ContentTab::Logs);
+
+        assert_eq!(ContentTab::Logs.prev(), ContentTab::Ai);
+        assert_eq!(ContentTab::Ai.prev(), ContentTab::Interactions);
     }
 
     #[test]
     fn test_clear_events() {
-        let mut app = App::new("ws://localhost:9000".to_string(), 10);
-        app.push_event(make_event("a", "t"));
+        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
+        app.push_event(make_event("flutter", "log"));
+        app.push_event(make_event("agent", "tool_call"));
         app.scroll_offset = 5;
 
         app.clear_events();
-        assert!(app.events.is_empty());
+        assert!(app.logs.is_empty());
+        assert!(app.ai_events.is_empty());
         assert_eq!(app.scroll_offset, 0);
     }
 
     #[test]
     fn test_handle_command_response_running() {
-        let mut app = App::new("ws://localhost:9000".to_string(), 10);
+        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
         let resp = CommandResponse {
             id: "1".to_string(),
             success: true,
@@ -453,7 +593,7 @@ mod tests {
 
     #[test]
     fn test_handle_agent_response_needs_context() {
-        let mut app = App::new("ws://localhost:9000".to_string(), 10);
+        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
         app.pending_response = true;
 
         let resp = AgentResponse {
@@ -471,7 +611,7 @@ mod tests {
 
     #[test]
     fn test_handle_agent_response_success_clears_conversation() {
-        let mut app = App::new("ws://localhost:9000".to_string(), 10);
+        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
         app.conversation_id = Some("conv-123".to_string());
         app.pending_response = true;
 
@@ -489,8 +629,8 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_agent_response_creates_event() {
-        let mut app = App::new("ws://localhost:9000".to_string(), 10);
+    fn test_handle_agent_response_creates_ai_event() {
+        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
         app.pending_response = true;
 
         let resp = AgentResponse {
@@ -502,15 +642,15 @@ mod tests {
         };
 
         app.handle_agent_response(resp);
-        assert_eq!(app.events.len(), 1);
-        let event = app.events.back().unwrap();
+        assert_eq!(app.ai_events.len(), 1);
+        let event = app.ai_events.back().unwrap();
         assert_eq!(event.source, "agent");
         assert_eq!(event.event_type, "agent_success");
     }
 
     #[test]
     fn test_handle_agent_response_error_sets_last_error() {
-        let mut app = App::new("ws://localhost:9000".to_string(), 10);
+        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
         app.pending_response = true;
 
         let resp = AgentResponse {
@@ -524,5 +664,35 @@ mod tests {
         app.handle_agent_response(resp);
         assert_eq!(app.last_agent_error, Some("Something went wrong".to_string()));
         assert!(app.conversation_id.is_none());
+    }
+
+    #[test]
+    fn test_instance_picker() {
+        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
+        app.set_instances(vec![
+            Instance {
+                instance_id: "inst-1".to_string(),
+                name: "app1".to_string(),
+                project_path: "/path/1".to_string(),
+                status: "running".to_string(),
+                pid: Some(1234),
+            },
+            Instance {
+                instance_id: "inst-2".to_string(),
+                name: "app2".to_string(),
+                project_path: "/path/2".to_string(),
+                status: "stopped".to_string(),
+                pid: None,
+            },
+        ]);
+
+        assert_eq!(app.selected_instance, Some("inst-1".to_string()));
+        assert_eq!(app.instance_picker_index, 0);
+
+        app.instance_picker_down();
+        assert_eq!(app.instance_picker_index, 1);
+
+        app.instance_picker_select();
+        assert_eq!(app.selected_instance, Some("inst-2".to_string()));
     }
 }

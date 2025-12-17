@@ -7,7 +7,6 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { registerRawTools, registerAgentTools } from './modes/index.js';
-import { getVMClient } from './vm/client.js';
 import { startMonitoringServer, getMonitor } from './monitoring/index.js';
 export function createServer(config) {
     const server = new Server({
@@ -27,12 +26,6 @@ export function createServer(config) {
         console.error('[interaction-tree-server] Starting in AGENT mode');
         registerAgentTools(server);
     }
-    // Set up VM client close handler
-    const vmClient = getVMClient();
-    vmClient.onClose(() => {
-        console.error('[interaction-tree-server] VM connection closed');
-        // Could notify the client here if needed
-    });
     return server;
 }
 export async function startServer(config) {

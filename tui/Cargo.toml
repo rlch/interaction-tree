@@ -14,6 +14,12 @@ path = "src/main.rs"
 ratatui = "0.29"
 crossterm = "0.28"
 
+# Third-party widgets
+tui-tree-widget = "0.23"
+throbber-widgets-tui = "0.9"
+tui-widgets = "0.5"
+tui-textarea = { version = "0.7", default-features = false, features = ["crossterm"] }
+
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = "0.24"
@@ -22,6 +28,7 @@ futures-util = "0.3"
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9"
 
 # Utils
 anyhow = "1"
@@ -29,6 +36,8 @@ chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
 uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
+terminal-colorsaurus = "1.0"
 
 [dev-dependencies]
 tokio-test = "0.4"
+tempfile = "3"

@@ -11,6 +11,18 @@ pub struct MonitoringEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Instance {
+    #[serde(rename = "instanceId")]
+    pub instance_id: String,
+    pub name: String,
+    #[serde(rename = "projectPath")]
+    pub project_path: String,
+    pub status: String,
+    #[serde(default)]
+    pub pid: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum OutgoingMessage {
     Command {

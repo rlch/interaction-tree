@@ -13,13 +13,9 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import * as schemas from '../tools/schemas.js';
 import * as handlers from '../tools/handlers.js';
-import { executeAgent, getDefaultAgentConfig } from '../agent/index.js';
-import type {
-  IntentResult,
-  ExecuteIntentInput,
-  AgentSession,
-  AgentConfig,
-} from '../types/agent.js';
+import { executeAgent, getDefaultAgentConfig, AGENT_SYSTEM_PROMPT } from '../agent/index.js';
+import { getSessionManager } from '../session/index.js';
+import type { IntentResult, ExecuteIntentInput, AgentSession, AgentConfig } from '../types/agent.js';
 import { getMonitor } from '../monitoring/index.js';
 
 async function withMonitoring<T>(
@@ -34,13 +30,17 @@ async function withMonitoring<T>(
   try {
     const result = await fn();
     const durationMs = Date.now() - start;
-    const isError = typeof result === 'object' && result !== null &&
+    const isError =
+      typeof result === 'object' &&
+      result !== null &&
       'content' in result &&
       Array.isArray((result as { content: unknown[] }).content) &&
       (result as { content: Array<{ text?: string }> }).content[0]?.text?.startsWith('Error:');
     monitor.mcp.response('tools/call', durationMs, !isError, {
       toolName,
-      error: isError ? (result as { content: Array<{ text: string }> }).content[0]?.text : undefined,
+      error: isError
+        ? (result as { content: Array<{ text: string }> }).content[0]?.text
+        : undefined,
     });
     return result;
   } catch (err) {
@@ -53,82 +53,23 @@ async function withMonitoring<T>(
   }
 }
 
-// Session management for multi-turn conversations
-const sessions = new Map<string, AgentSession>();
+// Session management for multi-turn agent conversations
+const agentSessions = new Map<string, AgentSession>();
 
 const DEFAULT_CONFIG: AgentConfig = {
   maxTurns: 10,
   sessionTimeoutMs: 5 * 60 * 1000, // 5 minutes
 };
 
-// Clean up expired sessions periodically
+// Clean up expired agent sessions periodically
 setInterval(() => {
   const now = Date.now();
-  for (const [id, session] of sessions) {
+  for (const [id, session] of agentSessions) {
     if (now - session.lastActiveAt.getTime() > DEFAULT_CONFIG.sessionTimeoutMs!) {
-      sessions.delete(id);
+      agentSessions.delete(id);
     }
   }
 }, 60000);
-
-const AGENT_SYSTEM_PROMPT = `You are an AI agent that manages Flutter app lifecycle and interactions.
-
-## Available Tools
-
-### Lifecycle Management
-- run: Start a Flutter app (spawns flutter run, auto-connects to VM service)
-- stop: Stop the running Flutter app
-- rebuild: Full rebuild (stop, optionally clean, then run again)
-- hotReload: Apply code changes while preserving app state
-- hotRestart: Apply code changes and reset app state (same process)
-- getStatus: Get current app status (process state, VM connection)
-- getLogs: Get recent app logs
-- getErrors: Get runtime errors
-
-### Interaction Tree
-- getTree: Get all interactable widgets (those with InteractionKey)
-- tap/doubleTap/longPress: Gesture interactions
-- enterText/clearText: Text input
-- scroll/drag: Scrolling and dragging
-- scrollIntoView: Scroll to make a widget visible
-- waitFor: Wait for widget state (exists, visible, etc.)
-- getState: Get widget's current state
-- executeAction: Run custom actions defined via InteractableMixin
-- batch: Execute multiple interactions in sequence
-
-## How to Work
-
-1. Check app status with getStatus
-2. If no app running, use run with the projectPath
-3. Call getTree to see available widgets
-4. Execute interactions based on the intent
-5. Return a concise summary
-
-## Lifecycle Commands
-
-- **run**: Use when starting fresh or app not running
-- **hotReload**: Use after code changes (preserves state, fast)
-- **hotRestart**: Use when state needs reset but no rebuild needed
-- **rebuild**: Use when dependencies changed or clean build needed
-- **stop**: Use when done or need to switch projects
-
-## When You Need More Information
-
-If you cannot proceed, respond EXACTLY in this format:
-
-ASK_CONTEXT: <your question>
-SUGGESTIONS: <optional comma-separated suggestions>
-
-Example:
-- "ASK_CONTEXT: No project path provided. Where is the Flutter project located?"
-
-Only ask when truly necessary. Try to infer from context first.
-
-## Response Format
-
-When successful, summarize what you did concisely.
-When failed, explain what went wrong with error details.
-`;
 
 /**
  * Execute an intent using the Claude Agent SDK.
@@ -137,42 +78,61 @@ async function executeIntentWithAgent(
   input: ExecuteIntentInput,
   config: AgentConfig
 ): Promise<IntentResult> {
-  // Check if this is a continuation
+  const manager = getSessionManager();
+
+  // Require active session with running app
+  const session = manager.getActive();
+  if (!session) {
+    return {
+      status: 'failed',
+      error: 'No active session. Use connect tool first.',
+    };
+  }
+
+  if (!session.app?.vmClient?.isConnected) {
+    return {
+      status: 'failed',
+      error: 'App not running or not connected. Use run tool first.',
+    };
+  }
+
+  // Check if this is a continuation of a previous conversation
   if (input.conversationId && input.answer) {
-    const session = sessions.get(input.conversationId);
-    if (!session) {
+    const agentSession = agentSessions.get(input.conversationId);
+    if (!agentSession) {
       return {
         status: 'failed',
-        error: `Session ${input.conversationId} not found or expired`,
+        error: `Conversation ${input.conversationId} not found or expired`,
       };
     }
 
-    session.lastActiveAt = new Date();
-    session.turnCount++;
+    agentSession.lastActiveAt = new Date();
+    agentSession.turnCount++;
 
-    if (session.turnCount > DEFAULT_CONFIG.maxTurns!) {
-      sessions.delete(input.conversationId);
+    if (agentSession.turnCount > DEFAULT_CONFIG.maxTurns!) {
+      agentSessions.delete(input.conversationId);
       return {
         status: 'failed',
         error: 'Max conversation turns exceeded',
       };
     }
 
-    // Build context-aware continuation prompt with original intent
-    let continuedIntent = `Original intent: ${session.originalIntent}\n`;
-    if (session.originalContext && session.originalContext.length > 0) {
-      continuedIntent += `Original context:\n${session.originalContext.join('\n---\n')}\n\n`;
+    // Build context-aware continuation prompt
+    let continuedIntent = `Original intent: ${agentSession.originalIntent}\n`;
+    if (agentSession.originalContext && agentSession.originalContext.length > 0) {
+      continuedIntent += `Original context:\n${agentSession.originalContext.join('\n---\n')}\n\n`;
     }
-    continuedIntent += `You previously asked: ${session.lastQuestion}\nThe answer is: ${input.answer}\n\nPlease continue with the original intent.`;
+    continuedIntent += `You previously asked: ${agentSession.lastQuestion}\nThe answer is: ${input.answer}\n\nPlease continue with the original intent.`;
 
     const result = await executeAgent(
       AGENT_SYSTEM_PROMPT,
       continuedIntent,
-      getDefaultAgentConfig(config)
+      getDefaultAgentConfig(session.projectPath, config),
+      session.app.vmClient
     );
 
     if (result.status === 'needs_context') {
-      session.lastQuestion = result.question;
+      agentSession.lastQuestion = result.question;
       return {
         status: 'needs_context',
         question: result.question!,
@@ -181,7 +141,7 @@ async function executeIntentWithAgent(
       };
     }
 
-    sessions.delete(input.conversationId);
+    agentSessions.delete(input.conversationId);
 
     if (result.status === 'failed') {
       return {
@@ -206,13 +166,14 @@ async function executeIntentWithAgent(
   const result = await executeAgent(
     AGENT_SYSTEM_PROMPT,
     prompt,
-    getDefaultAgentConfig(config)
+    getDefaultAgentConfig(session.projectPath, config),
+    session.app.vmClient
   );
 
-  // Handle needs_context - create a session
+  // Handle needs_context - create an agent session
   if (result.status === 'needs_context') {
     const sessionId = uuidv4();
-    sessions.set(sessionId, {
+    agentSessions.set(sessionId, {
       id: sessionId,
       createdAt: new Date(),
       lastActiveAt: new Date(),
@@ -246,44 +207,53 @@ async function executeIntentWithAgent(
 export function registerAgentTools(server: Server): void {
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [
-      // Agent-specific tool - the main entry point
+      // Session management
       {
-        name: 'execute_intent',
-        description:
-          'Execute a natural language intent against the Flutter app. ' +
-          'The AI agent will manage the app lifecycle and perform interactions. ' +
-          'May return needs_context if more information is required.',
-        inputSchema: schemas.executeIntentSchema,
+        name: 'create_session',
+        description: 'Create a new session for a Flutter project.',
+        inputSchema: schemas.createSessionSchema,
+      },
+      {
+        name: 'destroy_session',
+        description: 'Destroy a session (stops app if running).',
+        inputSchema: schemas.destroySessionSchema,
+      },
+      {
+        name: 'list_sessions',
+        description: 'List all sessions.',
+        inputSchema: schemas.listSessionsSchema,
+      },
+      {
+        name: 'connect',
+        description: 'Connect to a session. Required before using most other tools.',
+        inputSchema: schemas.connectSchema,
+      },
+      {
+        name: 'disconnect',
+        description: 'Disconnect from the current session.',
+        inputSchema: schemas.disconnectSchema,
       },
 
-      // Lifecycle tools (also available directly for control)
+      // App lifecycle (requires connected session)
       {
         name: 'run',
-        description:
-          'Run a Flutter app. Spawns flutter run, captures VM service URI, and auto-connects.',
+        description: 'Run the Flutter app in the connected session.',
         inputSchema: schemas.runSchema,
       },
       {
         name: 'stop',
-        description: 'Stop the running Flutter app.',
+        description: 'Stop the Flutter app in the connected session.',
         inputSchema: schemas.stopSchema,
       },
       {
         name: 'rebuild',
-        description:
-          'Full rebuild - stops the app, optionally runs flutter clean, then runs again.',
+        description: 'Full rebuild - stop, optionally clean, then run again.',
         inputSchema: schemas.rebuildSchema,
       },
       {
         name: 'get_status',
-        description: 'Get the current app status (process state and VM connection).',
+        description: 'Get the current session and app status.',
         inputSchema: schemas.getStatusSchema,
-      },
-      {
-        name: 'get_tree',
-        description:
-          'Get all InteractionKey-marked widgets from the running Flutter app.',
-        inputSchema: schemas.getTreeSchema,
       },
       {
         name: 'hot_reload',
@@ -305,6 +275,23 @@ export function registerAgentTools(server: Server): void {
         description: 'Get runtime errors from the Flutter app.',
         inputSchema: schemas.getErrorsSchema,
       },
+
+      // Interaction tree (requires running app)
+      {
+        name: 'get_tree',
+        description: 'Get all InteractionKey-marked widgets from the running Flutter app.',
+        inputSchema: schemas.getTreeSchema,
+      },
+
+      // Agent mode
+      {
+        name: 'execute_intent',
+        description:
+          'Execute a natural language intent against the Flutter app. ' +
+          'The AI agent will interpret the intent and perform interactions. ' +
+          'Requires connected session with running app.',
+        inputSchema: schemas.executeIntentSchema,
+      },
     ],
   }));
 
@@ -312,6 +299,55 @@ export function registerAgentTools(server: Server): void {
     const { name, arguments: args } = request.params;
 
     switch (name) {
+      // Session management
+      case 'create_session':
+        return withMonitoring(name, args, () =>
+          handlers.handleCreateSession(args as { name: string; projectPath: string })
+        );
+      case 'destroy_session':
+        return withMonitoring(name, args, () =>
+          handlers.handleDestroySession(args as { session: string })
+        );
+      case 'list_sessions':
+        return withMonitoring(name, args, () => handlers.handleListSessions());
+      case 'connect':
+        return withMonitoring(name, args, () =>
+          handlers.handleConnect(args as { session: string })
+        );
+      case 'disconnect':
+        return withMonitoring(name, args, () => handlers.handleDisconnect());
+
+      // App lifecycle
+      case 'run':
+        return withMonitoring(name, args, () =>
+          handlers.handleRun(args as Parameters<typeof handlers.handleRun>[0])
+        );
+      case 'stop':
+        return withMonitoring(name, args, () => handlers.handleStop());
+      case 'rebuild':
+        return withMonitoring(name, args, () =>
+          handlers.handleRebuild(args as Parameters<typeof handlers.handleRebuild>[0])
+        );
+      case 'get_status':
+        return withMonitoring(name, args, () => handlers.handleGetStatus());
+      case 'hot_reload':
+        return withMonitoring(name, args, () => handlers.handleHotReload());
+      case 'hot_restart':
+        return withMonitoring(name, args, () => handlers.handleHotRestart());
+      case 'get_logs':
+        return withMonitoring(name, args, () =>
+          handlers.handleGetLogs(args as { maxLines?: number })
+        );
+      case 'get_errors':
+        return withMonitoring(name, args, () => handlers.handleGetErrors());
+
+      // Interaction tree
+      case 'get_tree':
+        return withMonitoring(name, args, () =>
+          handlers.handleGetTree(args as Parameters<typeof handlers.handleGetTree>[0])
+        );
+
+      // Agent
       case 'execute_intent': {
         return withMonitoring(name, args, async () => {
           const result = await executeIntentWithAgent(
@@ -324,41 +360,12 @@ export function registerAgentTools(server: Server): void {
         });
       }
 
-      // Lifecycle tools (direct access)
-      case 'run':
-        return withMonitoring(name, args, () =>
-          handlers.handleRun(args as unknown as Parameters<typeof handlers.handleRun>[0]));
-      case 'stop':
-        return withMonitoring(name, args, () =>
-          handlers.handleStop(args as { instanceId?: string }));
-      case 'rebuild':
-        return withMonitoring(name, args, () =>
-          handlers.handleRebuild(args as unknown as Parameters<typeof handlers.handleRebuild>[0]));
-      case 'get_status':
-        return withMonitoring(name, args, () =>
-          handlers.handleGetStatus(args as { instanceId?: string }));
-      case 'get_tree':
-        return withMonitoring(name, args, () =>
-          handlers.handleGetTree(args as Parameters<typeof handlers.handleGetTree>[0]));
-      case 'hot_reload':
-        return withMonitoring(name, args, () =>
-          handlers.handleHotReload(args as { instanceId?: string }));
-      case 'hot_restart':
-        return withMonitoring(name, args, () =>
-          handlers.handleHotRestart(args as { instanceId?: string }));
-      case 'get_logs':
-        return withMonitoring(name, args, () =>
-          handlers.handleGetLogs(args as { maxLines?: number; instanceId?: string }));
-      case 'get_errors':
-        return withMonitoring(name, args, () =>
-          handlers.handleGetErrors(args as { instanceId?: string }));
-
       default:
         return {
           content: [
             {
               type: 'text',
-              text: `Unknown tool: ${name}. In agent mode, use execute_intent for most operations.`,
+              text: `Unknown tool: ${name}`,
             },
           ],
         };
@@ -367,4 +374,4 @@ export function registerAgentTools(server: Server): void {
 }
 
 // Export for testing
-export { AGENT_SYSTEM_PROMPT, executeIntentWithAgent };
+export { executeIntentWithAgent };

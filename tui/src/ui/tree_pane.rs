@@ -1,70 +1,64 @@
 use crate::app::{App, TreeNode};
+use crate::theme::theme;
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
+    style::{Modifier, Style},
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
+use tui_tree_widget::{Tree, TreeItem};
 
-pub fn render(frame: &mut Frame, app: &App, area: Rect) {
+pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
+    let t = theme();
+
     let block = Block::default()
         .title(" Interaction Tree ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(t.border));
 
-    if app.tree.is_some() {
-        // Get visible nodes (respecting expanded state)
-        let visible = app.tree_visible_nodes();
-        let inner_height = area.height.saturating_sub(2) as usize;
-        
-        let lines: Vec<Line> = visible
+    if let Some(ref tree) = app.tree {
+        let items: Vec<TreeItem<'_, String>> = tree
+            .nodes
             .iter()
-            .skip(app.tree_scroll_offset)
-            .take(inner_height)
-            .map(|(depth, node)| format_tree_node(node, *depth, app))
+            .map(|node| build_tree_item(node))
             .collect();
-        
-        let paragraph = Paragraph::new(lines).block(block);
-        frame.render_widget(paragraph, area);
+
+        let tree_widget = Tree::new(&items)
+            .expect("tree items have unique identifiers")
+            .block(block)
+            .highlight_style(
+                Style::default()
+                    .fg(t.text_highlight)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▶ ");
+
+        frame.render_stateful_widget(tree_widget, area, &mut app.tree_state);
     } else {
-        // Show "No tree loaded" or "Press :tree to fetch"
         let paragraph = Paragraph::new("Press :tree to fetch")
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(t.text_dim))
             .block(block);
         frame.render_widget(paragraph, area);
     }
 }
 
-fn format_tree_node(node: &TreeNode, depth: usize, app: &App) -> Line<'static> {
-    // Indent based on depth (2 spaces per level)
-    // Show expand/collapse indicator: ▼ (expanded) or ▶ (collapsed) if has children
-    // Show node id, optionally widget_type
-    // Highlight if selected (app.tree_selected)
-    
-    let indent = "  ".repeat(depth);
-    let has_children = !node.children.is_empty();
-    let is_expanded = app.tree_expanded.contains(&node.id);
-    
-    let indicator = if has_children {
-        if is_expanded { "▼ " } else { "▶ " }
+fn build_tree_item(node: &TreeNode) -> TreeItem<'_, String> {
+    let label = if let Some(ref wt) = node.widget_type {
+        format!("{} ({})", node.id, wt)
     } else {
-        "  "
+        node.id.clone()
     };
-    
-    let is_selected = app.tree_selected.as_ref() == Some(&node.id);
-    let style = if is_selected {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+
+    if node.children.is_empty() {
+        TreeItem::new_leaf(node.id.clone(), label)
     } else {
-        Style::default().fg(Color::White)
-    };
-    
-    // Format: "  ▼ node_id (WidgetType)"
-    let label = if let Some(wt) = &node.widget_type {
-        format!("{}{}{} ({})", indent, indicator, node.id, wt)
-    } else {
-        format!("{}{}{}", indent, indicator, node.id)
-    };
-    
-    Line::from(Span::styled(label, style))
+        let children: Vec<TreeItem<'_, String>> = node
+            .children
+            .iter()
+            .map(|child| build_tree_item(child))
+            .collect();
+
+        TreeItem::new(node.id.clone(), label, children)
+            .expect("children have unique identifiers")
+    }
 }

@@ -1,17 +1,51 @@
 /**
  * JSON Schema definitions for MCP tools.
  */
-export declare const runSchema: {
+export declare const createSessionSchema: {
     type: "object";
     properties: {
-        projectPath: {
-            type: string;
-            description: string;
-        };
         name: {
             type: string;
             description: string;
         };
+        projectPath: {
+            type: string;
+            description: string;
+        };
+    };
+    required: string[];
+};
+export declare const destroySessionSchema: {
+    type: "object";
+    properties: {
+        session: {
+            type: string;
+            description: string;
+        };
+    };
+    required: string[];
+};
+export declare const listSessionsSchema: {
+    type: "object";
+    properties: {};
+};
+export declare const connectSchema: {
+    type: "object";
+    properties: {
+        session: {
+            type: string;
+            description: string;
+        };
+    };
+    required: string[];
+};
+export declare const disconnectSchema: {
+    type: "object";
+    properties: {};
+};
+export declare const runSchema: {
+    type: "object";
+    properties: {
         device: {
             type: string;
             description: string;
@@ -36,32 +70,14 @@ export declare const runSchema: {
             description: string;
         };
     };
-    required: string[];
 };
 export declare const stopSchema: {
-    type: "object";
-    properties: {
-        instanceId: {
-            type: string;
-            description: string;
-        };
-    };
-};
-export declare const listSchema: {
     type: "object";
     properties: {};
 };
 export declare const rebuildSchema: {
     type: "object";
     properties: {
-        instanceId: {
-            type: string;
-            description: string;
-        };
-        projectPath: {
-            type: string;
-            description: string;
-        };
         device: {
             type: string;
             description: string;
@@ -90,15 +106,40 @@ export declare const rebuildSchema: {
             description: string;
         };
     };
-    required: string[];
+};
+export declare const getStatusSchema: {
+    type: "object";
+    properties: {};
+};
+export declare const hotReloadSchema: {
+    type: "object";
+    properties: {};
+};
+export declare const hotRestartSchema: {
+    type: "object";
+    properties: {};
+};
+export declare const getLogsSchema: {
+    type: "object";
+    properties: {
+        maxLines: {
+            type: string;
+            description: string;
+        };
+    };
+};
+export declare const getErrorsSchema: {
+    type: "object";
+    properties: {
+        clear: {
+            type: string;
+            description: string;
+        };
+    };
 };
 export declare const getTreeSchema: {
     type: "object";
     properties: {
-        instanceId: {
-            type: string;
-            description: string;
-        };
         includeBounds: {
             type: string;
             description: string;
@@ -116,10 +157,6 @@ export declare const getTreeSchema: {
 export declare const targetIdSchema: {
     type: "object";
     properties: {
-        instanceId: {
-            type: string;
-            description: string;
-        };
         id: {
             type: string;
             description: string;
@@ -130,10 +167,6 @@ export declare const targetIdSchema: {
 export declare const enterTextSchema: {
     type: "object";
     properties: {
-        instanceId: {
-            type: string;
-            description: string;
-        };
         id: {
             type: string;
             description: string;
@@ -148,10 +181,6 @@ export declare const enterTextSchema: {
 export declare const scrollSchema: {
     type: "object";
     properties: {
-        instanceId: {
-            type: string;
-            description: string;
-        };
         id: {
             type: string;
             description: string;
@@ -170,10 +199,6 @@ export declare const scrollSchema: {
 export declare const scrollIntoViewSchema: {
     type: "object";
     properties: {
-        instanceId: {
-            type: string;
-            description: string;
-        };
         id: {
             type: string;
             description: string;
@@ -188,10 +213,6 @@ export declare const scrollIntoViewSchema: {
 export declare const waitForSchema: {
     type: "object";
     properties: {
-        instanceId: {
-            type: string;
-            description: string;
-        };
         id: {
             type: string;
             description: string;
@@ -211,10 +232,6 @@ export declare const waitForSchema: {
 export declare const executeActionSchema: {
     type: "object";
     properties: {
-        instanceId: {
-            type: string;
-            description: string;
-        };
         id: {
             type: string;
             description: string;
@@ -233,10 +250,6 @@ export declare const executeActionSchema: {
 export declare const batchSchema: {
     type: "object";
     properties: {
-        instanceId: {
-            type: string;
-            description: string;
-        };
         steps: {
             type: string;
             description: string;
@@ -287,10 +300,6 @@ export declare const batchSchema: {
 export declare const executeIntentSchema: {
     type: "object";
     properties: {
-        instanceId: {
-            type: string;
-            description: string;
-        };
         intent: {
             type: string;
             description: string;
@@ -312,58 +321,5 @@ export declare const executeIntentSchema: {
         };
     };
     required: string[];
-};
-export declare const getStatusSchema: {
-    type: "object";
-    properties: {
-        instanceId: {
-            type: string;
-            description: string;
-        };
-    };
-};
-export declare const hotReloadSchema: {
-    type: "object";
-    properties: {
-        instanceId: {
-            type: string;
-            description: string;
-        };
-    };
-};
-export declare const hotRestartSchema: {
-    type: "object";
-    properties: {
-        instanceId: {
-            type: string;
-            description: string;
-        };
-    };
-};
-export declare const getLogsSchema: {
-    type: "object";
-    properties: {
-        instanceId: {
-            type: string;
-            description: string;
-        };
-        maxLines: {
-            type: string;
-            description: string;
-        };
-    };
-};
-export declare const getErrorsSchema: {
-    type: "object";
-    properties: {
-        instanceId: {
-            type: string;
-            description: string;
-        };
-        clear: {
-            type: string;
-            description: string;
-        };
-    };
 };
 //# sourceMappingURL=schemas.d.ts.map

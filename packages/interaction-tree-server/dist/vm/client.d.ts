@@ -50,5 +50,4 @@ export declare class VMServiceClient {
     private handleMessage;
     private handleClose;
 }
-export declare function getVMClient(): VMServiceClient;
 //# sourceMappingURL=client.d.ts.map
