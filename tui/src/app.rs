@@ -4,7 +4,7 @@ use tui_textarea::TextArea;
 use tui_tree_widget::TreeState;
 
 use crate::project::ProjectInfo;
-use crate::ws::protocol::{AgentResponse, AgentStatus, CommandResponse, Instance, MonitoringEvent};
+use crate::ws::protocol::{AgentResponse, AgentStatus, CommandResponse, MonitoringEvent, Session};
 
 #[derive(Debug, Clone, Default)]
 pub struct InteractionTree {
@@ -44,12 +44,20 @@ pub enum AppStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mode {
     Normal,
-    Command,
     Filter,
     Input,
     Help,
     Confirm(ConfirmAction),
-    InstancePicker,
+    SessionPicker,
+    /// Prompt for text input with a specific purpose
+    InputPrompt(InputPromptKind),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputPromptKind {
+    CreateSession,
+    /// Run app with device argument (e.g., "macOS", "chrome", device ID)
+    RunApp,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,34 +74,37 @@ pub enum Pane {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ContentTab {
+    /// Session-level logs (daemon events, session status)
     #[default]
-    Logs,
-    Interactions,
-    Ai,
+    Session,
+    /// Flutter logs (from flutter run process)
+    Flutter,
+    /// Agent conversation and tool calls
+    Agent,
 }
 
 impl ContentTab {
     pub fn next(self) -> Self {
         match self {
-            ContentTab::Logs => ContentTab::Interactions,
-            ContentTab::Interactions => ContentTab::Ai,
-            ContentTab::Ai => ContentTab::Logs,
+            ContentTab::Session => ContentTab::Flutter,
+            ContentTab::Flutter => ContentTab::Agent,
+            ContentTab::Agent => ContentTab::Session,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            ContentTab::Logs => ContentTab::Ai,
-            ContentTab::Interactions => ContentTab::Logs,
-            ContentTab::Ai => ContentTab::Interactions,
+            ContentTab::Session => ContentTab::Agent,
+            ContentTab::Flutter => ContentTab::Session,
+            ContentTab::Agent => ContentTab::Flutter,
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            ContentTab::Logs => "Logs",
-            ContentTab::Interactions => "Interactions",
-            ContentTab::Ai => "AI",
+            ContentTab::Session => "Session",
+            ContentTab::Flutter => "Flutter",
+            ContentTab::Agent => "Agent",
         }
     }
 }
@@ -103,15 +114,18 @@ pub struct App<'a> {
     pub server_uri: String,
 
     pub project: ProjectInfo,
-    pub instances: Vec<Instance>,
-    pub selected_instance: Option<String>,
-    pub instance_picker_index: usize,
+    pub sessions: Vec<Session>,
+    pub selected_session: Option<String>,
+    pub session_picker_index: usize,
 
     pub app_status: AppStatus,
 
-    pub logs: VecDeque<LogEntry>,
-    pub interactions: VecDeque<MonitoringEvent>,
-    pub ai_events: VecDeque<MonitoringEvent>,
+    /// Session-level logs (daemon events, status changes)
+    pub session_logs: VecDeque<LogEntry>,
+    /// Flutter logs (from flutter run process)
+    pub flutter_logs: VecDeque<LogEntry>,
+    /// Agent events (tool calls, responses)
+    pub agent_events: VecDeque<MonitoringEvent>,
     pub max_events: usize,
 
     pub mode: Mode,
@@ -133,6 +147,14 @@ pub struct App<'a> {
 
     pub throbber_state: throbber_widgets_tui::ThrobberState,
 
+    // Completions - currently unused, hotkey-driven UI instead
+    // pub completions: Vec<&'static str>,
+    // pub completion_index: usize,
+    // pub completion_start_col: usize,
+
+    pub toasts: VecDeque<Toast>,
+    pub toast_ttl_secs: u64,
+
     pub should_quit: bool,
 }
 
@@ -141,7 +163,6 @@ pub struct LogEntry {
     pub ts: String,
     pub level: LogLevel,
     pub message: String,
-    pub ansi_spans: Option<Vec<AnsiSpan>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,13 +174,48 @@ pub enum LogLevel {
 }
 
 #[derive(Debug, Clone)]
-pub struct AnsiSpan {
-    pub text: String,
-    pub fg: Option<ratatui::style::Color>,
-    pub bg: Option<ratatui::style::Color>,
-    pub bold: bool,
-    pub italic: bool,
-    pub underline: bool,
+pub struct Toast {
+    pub message: String,
+    pub level: ToastLevel,
+    pub created_at: std::time::Instant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToastLevel {
+    Info,
+    Success,
+    Warning,
+    Error,
+}
+
+impl Toast {
+    pub fn error(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            level: ToastLevel::Error,
+            created_at: std::time::Instant::now(),
+        }
+    }
+
+    pub fn success(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            level: ToastLevel::Success,
+            created_at: std::time::Instant::now(),
+        }
+    }
+
+    pub fn info(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            level: ToastLevel::Info,
+            created_at: std::time::Instant::now(),
+        }
+    }
+
+    pub fn is_expired(&self, ttl_secs: u64) -> bool {
+        self.created_at.elapsed().as_secs() >= ttl_secs
+    }
 }
 
 impl<'a> App<'a> {
@@ -173,18 +229,18 @@ impl<'a> App<'a> {
             server_uri: uri,
 
             project,
-            instances: Vec::new(),
-            selected_instance: None,
-            instance_picker_index: 0,
+            sessions: Vec::new(),
+            selected_session: None,
+            session_picker_index: 0,
 
             app_status: AppStatus::Unknown,
 
-            logs: VecDeque::with_capacity(max_events),
-            interactions: VecDeque::with_capacity(max_events),
-            ai_events: VecDeque::with_capacity(max_events),
+            session_logs: VecDeque::with_capacity(max_events),
+            flutter_logs: VecDeque::with_capacity(max_events),
+            agent_events: VecDeque::with_capacity(max_events),
             max_events,
 
-            mode: Mode::Normal,
+            mode: Mode::SessionPicker,
             input_buffer: String::new(),
             textarea,
             filter: None,
@@ -203,34 +259,101 @@ impl<'a> App<'a> {
 
             throbber_state: throbber_widgets_tui::ThrobberState::default(),
 
+            toasts: VecDeque::new(),
+            toast_ttl_secs: 5,
+
             should_quit: false,
         }
     }
+
+    pub fn push_toast(&mut self, toast: Toast) {
+        self.toasts.push_back(toast);
+        // Keep max 5 toasts
+        while self.toasts.len() > 5 {
+            self.toasts.pop_front();
+        }
+    }
+
+    pub fn expire_toasts(&mut self) {
+        self.toasts.retain(|t| !t.is_expired(self.toast_ttl_secs));
+    }
+
+    // Completion methods - currently unused, hotkey-driven UI instead
+    /*
+    pub fn update_completions(&mut self) {
+        let input = self.input_buffer.to_lowercase();
+        if input.is_empty() {
+            self.completions.clear();
+            self.completion_index = 0;
+            return;
+        }
+        let was_empty = self.completions.is_empty();
+        self.completions = COMMANDS
+            .iter()
+            .copied()
+            .filter(|cmd| cmd.starts_with(&input) && *cmd != input)
+            .collect();
+        self.completion_index = 0;
+        if was_empty && !self.completions.is_empty() {
+            self.completion_start_col = self.input_buffer.len();
+        }
+    }
+
+    pub fn cycle_completion_next(&mut self) {
+        if self.completions.is_empty() {
+            return;
+        }
+        self.completion_index = (self.completion_index + 1) % self.completions.len();
+    }
+
+    pub fn cycle_completion_prev(&mut self) {
+        if self.completions.is_empty() {
+            return;
+        }
+        if self.completion_index == 0 {
+            self.completion_index = self.completions.len() - 1;
+        } else {
+            self.completion_index -= 1;
+        }
+    }
+
+    pub fn accept_completion(&mut self) {
+        if let Some(cmd) = self.completions.get(self.completion_index) {
+            self.input_buffer = cmd.to_string();
+            self.completions.clear();
+            self.completion_index = 0;
+        }
+    }
+
+    pub fn current_completion(&self) -> Option<&'static str> {
+        self.completions.get(self.completion_index).copied()
+    }
+    */
 
     pub fn set_tree(&mut self, tree: InteractionTree) {
         self.tree = Some(tree);
         self.tree_state = TreeState::default();
     }
 
-    pub fn push_log(&mut self, entry: LogEntry) {
-        if self.logs.len() >= self.max_events {
-            self.logs.pop_front();
+    pub fn push_session_log(&mut self, entry: LogEntry) {
+        if self.session_logs.len() >= self.max_events {
+            self.session_logs.pop_front();
         }
-        self.logs.push_back(entry);
+        self.session_logs.push_back(entry);
     }
 
-    pub fn push_interaction(&mut self, event: MonitoringEvent) {
-        if self.interactions.len() >= self.max_events {
-            self.interactions.pop_front();
+    pub fn push_flutter_log(&mut self, entry: LogEntry) {
+        if self.flutter_logs.len() >= self.max_events {
+            self.flutter_logs.pop_front();
         }
-        self.interactions.push_back(event);
+        self.flutter_logs.push_back(entry);
     }
 
-    pub fn push_ai_event(&mut self, event: MonitoringEvent) {
-        if self.ai_events.len() >= self.max_events {
-            self.ai_events.pop_front();
+    pub fn push_agent_event(&mut self, event: MonitoringEvent) {
+        if self.agent_events.len() >= self.max_events {
+            self.agent_events.pop_front();
         }
-        self.ai_events.push_back(event);
+        self.agent_events.push_back(event);
     }
 
     pub fn push_event(&mut self, event: MonitoringEvent) {
@@ -238,10 +361,23 @@ impl<'a> App<'a> {
         let event_type = event.event_type.to_lowercase();
 
         if source.contains("agent") || event_type.starts_with("agent_") || event_type.contains("tool") {
-            self.push_ai_event(event);
-        } else if source.contains("tree") || event_type.contains("interaction") {
-            self.push_interaction(event);
+            self.push_agent_event(event);
+        } else if source.contains("flutter") || event_type.starts_with("flutter.") {
+            // Flutter logs go to Flutter tab
+            let entry = LogEntry {
+                ts: event.ts.clone(),
+                level: if event_type.contains("error") {
+                    LogLevel::Error
+                } else if event_type.contains("warn") {
+                    LogLevel::Warning
+                } else {
+                    LogLevel::Info
+                },
+                message: extract_flutter_log(&event.payload),
+            };
+            self.push_flutter_log(entry);
         } else {
+            // Session-level events (session created, status changes, etc.)
             let entry = LogEntry {
                 ts: event.ts.clone(),
                 level: if event_type.contains("error") {
@@ -254,15 +390,14 @@ impl<'a> App<'a> {
                     LogLevel::Info
                 },
                 message: format!("[{}] {}", event.source, summarize_payload(&event.payload)),
-                ansi_spans: None,
             };
-            self.push_log(entry);
+            self.push_session_log(entry);
         }
     }
 
-    pub fn filtered_logs(&self) -> impl Iterator<Item = &LogEntry> {
+    pub fn filtered_session_logs(&self) -> impl Iterator<Item = &LogEntry> {
         let filter = self.filter.clone();
-        self.logs.iter().filter(move |e| {
+        self.session_logs.iter().filter(move |e| {
             let Some(ref pattern) = filter else {
                 return true;
             };
@@ -271,21 +406,20 @@ impl<'a> App<'a> {
         })
     }
 
-    pub fn filtered_interactions(&self) -> impl Iterator<Item = &MonitoringEvent> {
+    pub fn filtered_flutter_logs(&self) -> impl Iterator<Item = &LogEntry> {
         let filter = self.filter.clone();
-        self.interactions.iter().filter(move |e| {
+        self.flutter_logs.iter().filter(move |e| {
             let Some(ref pattern) = filter else {
                 return true;
             };
             let pattern_lower = pattern.to_lowercase();
-            e.source.to_lowercase().contains(&pattern_lower)
-                || e.event_type.to_lowercase().contains(&pattern_lower)
+            e.message.to_lowercase().contains(&pattern_lower)
         })
     }
 
-    pub fn filtered_ai_events(&self) -> impl Iterator<Item = &MonitoringEvent> {
+    pub fn filtered_agent_events(&self) -> impl Iterator<Item = &MonitoringEvent> {
         let filter = self.filter.clone();
-        self.ai_events.iter().filter(move |e| {
+        self.agent_events.iter().filter(move |e| {
             let Some(ref pattern) = filter else {
                 return true;
             };
@@ -308,6 +442,36 @@ impl<'a> App<'a> {
                 return;
             }
 
+            // Check if this is a sessions list response
+            if let Some(sessions) = resp.data.get("sessions").and_then(|s| s.as_array()) {
+                if let Ok(parsed) = serde_json::from_value::<Vec<Session>>(serde_json::Value::Array(sessions.clone())) {
+                    self.sessions = parsed;
+                    // If we have no selected session and there are sessions, select first
+                    if self.selected_session.is_none() && !self.sessions.is_empty() {
+                        self.session_picker_index = 0;
+                    }
+                }
+                return;
+            }
+
+            // Check if this is a session creation response
+            if let Some(session) = resp.data.get("session") {
+                if let Ok(parsed) = serde_json::from_value::<Session>(session.clone()) {
+                    let session_id = parsed.id.clone();
+                    // Add to sessions list if not already there
+                    if !self.sessions.iter().any(|s| s.id == session_id) {
+                        self.sessions.push(parsed);
+                    }
+                    // Auto-select the new session
+                    self.selected_session = Some(session_id);
+                    self.session_picker_index = self.sessions.len().saturating_sub(1);
+                    self.mode = Mode::Normal;
+                    self.push_toast(Toast::success("Session created"));
+                }
+                return;
+            }
+
+            // Check for app status
             if let Some(status) = resp.data.get("status").and_then(|s| s.as_str()) {
                 match status {
                     "starting" => self.app_status = AppStatus::Starting,
@@ -321,12 +485,12 @@ impl<'a> App<'a> {
                             .to_string();
                         self.app_status = AppStatus::Running { pid, uri };
                     }
-                    "stopped" => self.app_status = AppStatus::Stopped,
+                    "stopped" | "not_running" => self.app_status = AppStatus::Stopped,
                     _ => {}
                 }
             }
         } else if let Some(err) = resp.error {
-            self.app_status = AppStatus::Error(err);
+            self.push_toast(Toast::error(&err));
         }
     }
 
@@ -370,6 +534,9 @@ impl<'a> App<'a> {
             AgentStatus::Error => {
                 self.conversation_id = None;
                 self.agent_question = None;
+                if let Some(ref err) = resp.summary {
+                    self.push_toast(Toast::error(err));
+                }
                 self.last_agent_error = resp.summary;
             }
         }
@@ -377,6 +544,14 @@ impl<'a> App<'a> {
 
     pub fn in_answer_mode(&self) -> bool {
         self.conversation_id.is_some()
+    }
+
+    pub fn is_app_running(&self) -> bool {
+        matches!(self.app_status, AppStatus::Running { .. } | AppStatus::Starting)
+    }
+
+    pub fn has_session(&self) -> bool {
+        self.selected_session.is_some()
     }
 
     pub fn cancel_answer_mode(&mut self) {
@@ -390,9 +565,9 @@ impl<'a> App<'a> {
 
     pub fn scroll_down(&mut self) {
         let event_count = match self.content_tab {
-            ContentTab::Logs => self.filtered_logs().count(),
-            ContentTab::Interactions => self.filtered_interactions().count(),
-            ContentTab::Ai => self.filtered_ai_events().count(),
+            ContentTab::Session => self.filtered_session_logs().count(),
+            ContentTab::Flutter => self.filtered_flutter_logs().count(),
+            ContentTab::Agent => self.filtered_agent_events().count(),
         };
         if event_count > 0 && self.scroll_offset < event_count - 1 {
             self.scroll_offset += 1;
@@ -424,34 +599,34 @@ impl<'a> App<'a> {
     }
 
     pub fn clear_events(&mut self) {
-        self.logs.clear();
-        self.interactions.clear();
-        self.ai_events.clear();
+        self.session_logs.clear();
+        self.flutter_logs.clear();
+        self.agent_events.clear();
         self.scroll_offset = 0;
     }
 
-    pub fn set_instances(&mut self, instances: Vec<Instance>) {
-        self.instances = instances;
-        if self.selected_instance.is_none() && !self.instances.is_empty() {
-            self.selected_instance = Some(self.instances[0].instance_id.clone());
+    pub fn set_sessions(&mut self, sessions: Vec<Session>) {
+        self.sessions = sessions;
+        if self.selected_session.is_none() && !self.sessions.is_empty() {
+            self.selected_session = Some(self.sessions[0].id.clone());
         }
     }
 
-    pub fn instance_picker_up(&mut self) {
-        if self.instance_picker_index > 0 {
-            self.instance_picker_index -= 1;
+    pub fn session_picker_up(&mut self) {
+        if self.session_picker_index > 0 {
+            self.session_picker_index -= 1;
         }
     }
 
-    pub fn instance_picker_down(&mut self) {
-        if self.instance_picker_index < self.instances.len().saturating_sub(1) {
-            self.instance_picker_index += 1;
+    pub fn session_picker_down(&mut self) {
+        if self.session_picker_index < self.sessions.len().saturating_sub(1) {
+            self.session_picker_index += 1;
         }
     }
 
-    pub fn instance_picker_select(&mut self) {
-        if let Some(instance) = self.instances.get(self.instance_picker_index) {
-            self.selected_instance = Some(instance.instance_id.clone());
+    pub fn session_picker_select(&mut self) {
+        if let Some(session) = self.sessions.get(self.session_picker_index) {
+            self.selected_session = Some(session.id.clone());
         }
         self.mode = Mode::Normal;
     }
@@ -491,6 +666,15 @@ fn summarize_payload(payload: &serde_json::Value) -> String {
     }
 }
 
+fn extract_flutter_log(payload: &serde_json::Value) -> String {
+    // Flutter logs come as { "line": "..." }
+    if let Some(line) = payload.get("line").and_then(|v| v.as_str()) {
+        return line.to_string();
+    }
+    // Fall back to summarizing the payload
+    summarize_payload(payload)
+}
+
 fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
@@ -527,47 +711,46 @@ mod tests {
         assert_eq!(app.server_uri, "ws://localhost:9000");
         assert_eq!(app.max_events, 100);
         assert_eq!(app.ws_state, WsState::Disconnected);
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.mode, Mode::SessionPicker);
         assert!(!app.should_quit);
     }
 
     #[test]
-    fn test_push_log_trims_to_max() {
+    fn test_push_session_log_trims_to_max() {
         let mut app = App::new("ws://localhost:9000".to_string(), 3, test_project());
         for i in 0..4 {
-            app.push_log(LogEntry {
+            app.push_session_log(LogEntry {
                 ts: format!("2024-01-01T00:00:0{}Z", i),
                 level: LogLevel::Info,
                 message: format!("msg{}", i),
-                ansi_spans: None,
             });
         }
 
-        assert_eq!(app.logs.len(), 3);
-        assert!(app.logs[0].message.contains("msg1"));
-        assert!(app.logs[2].message.contains("msg3"));
+        assert_eq!(app.session_logs.len(), 3);
+        assert!(app.session_logs[0].message.contains("msg1"));
+        assert!(app.session_logs[2].message.contains("msg3"));
     }
 
     #[test]
     fn test_content_tab_cycling() {
-        assert_eq!(ContentTab::Logs.next(), ContentTab::Interactions);
-        assert_eq!(ContentTab::Interactions.next(), ContentTab::Ai);
-        assert_eq!(ContentTab::Ai.next(), ContentTab::Logs);
+        assert_eq!(ContentTab::Session.next(), ContentTab::Flutter);
+        assert_eq!(ContentTab::Flutter.next(), ContentTab::Agent);
+        assert_eq!(ContentTab::Agent.next(), ContentTab::Session);
 
-        assert_eq!(ContentTab::Logs.prev(), ContentTab::Ai);
-        assert_eq!(ContentTab::Ai.prev(), ContentTab::Interactions);
+        assert_eq!(ContentTab::Session.prev(), ContentTab::Agent);
+        assert_eq!(ContentTab::Agent.prev(), ContentTab::Flutter);
     }
 
     #[test]
     fn test_clear_events() {
         let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
-        app.push_event(make_event("flutter", "log"));
+        app.push_event(make_event("flutter", "flutter.log"));
         app.push_event(make_event("agent", "tool_call"));
         app.scroll_offset = 5;
 
         app.clear_events();
-        assert!(app.logs.is_empty());
-        assert!(app.ai_events.is_empty());
+        assert!(app.flutter_logs.is_empty());
+        assert!(app.agent_events.is_empty());
         assert_eq!(app.scroll_offset, 0);
     }
 
@@ -629,7 +812,7 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_agent_response_creates_ai_event() {
+    fn test_handle_agent_response_creates_agent_event() {
         let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
         app.pending_response = true;
 
@@ -642,8 +825,8 @@ mod tests {
         };
 
         app.handle_agent_response(resp);
-        assert_eq!(app.ai_events.len(), 1);
-        let event = app.ai_events.back().unwrap();
+        assert_eq!(app.agent_events.len(), 1);
+        let event = app.agent_events.back().unwrap();
         assert_eq!(event.source, "agent");
         assert_eq!(event.event_type, "agent_success");
     }
@@ -667,32 +850,118 @@ mod tests {
     }
 
     #[test]
-    fn test_instance_picker() {
+    fn test_handle_command_response_create_session() {
         let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
-        app.set_instances(vec![
-            Instance {
-                instance_id: "inst-1".to_string(),
+        app.mode = Mode::SessionPicker;
+        assert!(app.sessions.is_empty());
+
+        let resp = CommandResponse {
+            id: "1".to_string(),
+            success: true,
+            data: serde_json::json!({
+                "session": {
+                    "id": "sess-new",
+                    "name": "my-new-session",
+                    "projectPath": "/path/to/project",
+                    "appStatus": "not_running",
+                    "createdAt": "2024-01-01T00:00:00Z",
+                    "lastActiveAt": "2024-01-01T00:00:00Z"
+                }
+            }),
+            error: None,
+        };
+
+        app.handle_command_response(resp);
+
+        // Session should be added
+        assert_eq!(app.sessions.len(), 1);
+        assert_eq!(app.sessions[0].id, "sess-new");
+        assert_eq!(app.sessions[0].name, "my-new-session");
+
+        // Session should be auto-selected
+        assert_eq!(app.selected_session, Some("sess-new".to_string()));
+
+        // Mode should switch to Normal
+        assert_eq!(app.mode, Mode::Normal);
+
+        // Toast should be shown (can't easily check content, but toasts queue should have one)
+        assert_eq!(app.toasts.len(), 1);
+    }
+
+    #[test]
+    fn test_handle_command_response_list_sessions() {
+        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
+        assert!(app.sessions.is_empty());
+
+        let resp = CommandResponse {
+            id: "1".to_string(),
+            success: true,
+            data: serde_json::json!({
+                "sessions": [
+                    {
+                        "id": "sess-1",
+                        "name": "app1",
+                        "projectPath": "/path/1",
+                        "appStatus": "running",
+                        "vmServiceUri": "ws://127.0.0.1:5678",
+                        "pid": 1234,
+                        "createdAt": "2024-01-01T00:00:00Z",
+                        "lastActiveAt": "2024-01-01T00:00:00Z"
+                    },
+                    {
+                        "id": "sess-2",
+                        "name": "app2",
+                        "projectPath": "/path/2",
+                        "appStatus": "not_running",
+                        "createdAt": "2024-01-01T00:00:00Z",
+                        "lastActiveAt": "2024-01-01T00:00:00Z"
+                    }
+                ]
+            }),
+            error: None,
+        };
+
+        app.handle_command_response(resp);
+
+        assert_eq!(app.sessions.len(), 2);
+        assert_eq!(app.sessions[0].id, "sess-1");
+        assert_eq!(app.sessions[1].id, "sess-2");
+        assert_eq!(app.session_picker_index, 0);
+    }
+
+    #[test]
+    fn test_session_picker() {
+        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
+        app.set_sessions(vec![
+            Session {
+                id: "sess-1".to_string(),
                 name: "app1".to_string(),
                 project_path: "/path/1".to_string(),
-                status: "running".to_string(),
+                app_status: "running".to_string(),
+                vm_service_uri: Some("ws://127.0.0.1:5678".to_string()),
                 pid: Some(1234),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                last_active_at: "2024-01-01T00:00:00Z".to_string(),
             },
-            Instance {
-                instance_id: "inst-2".to_string(),
+            Session {
+                id: "sess-2".to_string(),
                 name: "app2".to_string(),
                 project_path: "/path/2".to_string(),
-                status: "stopped".to_string(),
+                app_status: "not_running".to_string(),
+                vm_service_uri: None,
                 pid: None,
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                last_active_at: "2024-01-01T00:00:00Z".to_string(),
             },
         ]);
 
-        assert_eq!(app.selected_instance, Some("inst-1".to_string()));
-        assert_eq!(app.instance_picker_index, 0);
+        assert_eq!(app.selected_session, Some("sess-1".to_string()));
+        assert_eq!(app.session_picker_index, 0);
 
-        app.instance_picker_down();
-        assert_eq!(app.instance_picker_index, 1);
+        app.session_picker_down();
+        assert_eq!(app.session_picker_index, 1);
 
-        app.instance_picker_select();
-        assert_eq!(app.selected_instance, Some("inst-2".to_string()));
+        app.session_picker_select();
+        assert_eq!(app.selected_session, Some("sess-2".to_string()));
     }
 }

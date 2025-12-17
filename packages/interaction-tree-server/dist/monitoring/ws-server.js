@@ -20,6 +20,72 @@ async function handleCommand(cmd, ws) {
     };
     try {
         switch (cmd.action) {
+            // Session Management
+            case 'create_session': {
+                const { name, projectPath } = cmd.data;
+                if (!name || !projectPath) {
+                    sendResponse({ success: false, error: 'name and projectPath are required' });
+                    return;
+                }
+                const newSession = manager.create({ name, projectPath });
+                sendResponse({
+                    success: true,
+                    data: {
+                        session: {
+                            id: newSession.id,
+                            name: newSession.name,
+                            projectPath: newSession.projectPath,
+                            appStatus: newSession.appStatus,
+                            vmServiceUri: newSession.vmServiceUri ?? null,
+                            pid: newSession.pid ?? null,
+                            createdAt: newSession.createdAt,
+                            lastActiveAt: newSession.lastActiveAt,
+                        },
+                    },
+                });
+                break;
+            }
+            case 'destroy_session': {
+                const { session: sessionId } = cmd.data;
+                if (!sessionId) {
+                    sendResponse({ success: false, error: 'session is required' });
+                    return;
+                }
+                try {
+                    await manager.destroy(sessionId);
+                    sendResponse({ success: true });
+                }
+                catch (err) {
+                    sendResponse({
+                        success: false,
+                        error: err instanceof Error ? err.message : 'Session not found',
+                    });
+                }
+                break;
+            }
+            case 'list_sessions': {
+                const sessions = manager.list();
+                sendResponse({ success: true, data: { sessions } });
+                break;
+            }
+            case 'connect': {
+                const { session: sessionId } = cmd.data;
+                if (!sessionId) {
+                    sendResponse({ success: false, error: 'session is required' });
+                    return;
+                }
+                try {
+                    manager.connect(sessionId);
+                    sendResponse({ success: true });
+                }
+                catch (err) {
+                    sendResponse({
+                        success: false,
+                        error: err instanceof Error ? err.message : 'Session not found',
+                    });
+                }
+                break;
+            }
             case 'hot_reload': {
                 if (!session?.app || session.app.status !== 'running') {
                     sendResponse({ success: false, error: 'No app running' });
@@ -36,6 +102,31 @@ async function handleCommand(cmd, ws) {
                 }
                 const result = await manager.hotRestart();
                 sendResponse({ success: result.success, error: result.error });
+                break;
+            }
+            case 'run': {
+                if (!session) {
+                    sendResponse({ success: false, error: 'No active session. Connect to a session first.' });
+                    return;
+                }
+                try {
+                    const options = cmd.data;
+                    const result = await manager.runApp(options ?? {});
+                    sendResponse({
+                        success: true,
+                        data: {
+                            status: result.appStatus,
+                            pid: result.pid,
+                            vmServiceUri: result.vmServiceUri,
+                        },
+                    });
+                }
+                catch (err) {
+                    sendResponse({
+                        success: false,
+                        error: err instanceof Error ? err.message : String(err),
+                    });
+                }
                 break;
             }
             case 'stop': {

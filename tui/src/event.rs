@@ -12,11 +12,12 @@ use ratatui::Terminal;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::app::{App, ConfirmAction, Mode, Pane, WsState};
+use crate::app::{App, ConfirmAction, InputPromptKind, Mode, Pane, WsState};
+use crate::ws::protocol::Session;
 use crate::commands::{parse_command, TuiCommand};
 use crate::ui;
 use crate::ws::client::{WsClient, WsEvent};
-use crate::ws::protocol::{IncomingMessage, OutgoingMessage};
+use crate::ws::protocol::{IncomingMessage, OutgoingMessage, SessionSummary};
 
 pub async fn run(app: &mut App<'_>) -> Result<()> {
     crossterm::terminal::enable_raw_mode()?;
@@ -47,16 +48,22 @@ async fn run_event_loop(
     let ws_client = match WsClient::connect(&app.server_uri, ws_tx).await {
         Ok(client) => {
             app.ws_state = WsState::Connected;
+            // Sessions are received from ServerHello, no need to request them
             Some(client)
         }
         Err(e) => {
             app.ws_state = WsState::Disconnected;
+            app.push_toast(crate::app::Toast::error(format!("Connection failed: {}", e)));
             tracing::error!("Failed to connect to WebSocket: {}", e);
             None
         }
     };
 
     loop {
+        // Expire old toasts and tick throbber
+        app.expire_toasts();
+        app.throbber_state.calc_next();
+
         terminal.draw(|f| ui::render(f, app))?;
 
         if app.should_quit {
@@ -111,12 +118,12 @@ async fn handle_key_event(
 
     match &app.mode {
         Mode::Normal => handle_normal_mode(app, key, ws).await?,
-        Mode::Command => handle_command_mode(app, key, ws).await?,
         Mode::Filter => handle_filter_mode(app, key),
         Mode::Input => handle_input_mode(app, key, ws).await?,
         Mode::Help => handle_help_mode(app, key),
         Mode::Confirm(action) => handle_confirm_mode(app, key, action.clone()),
-        Mode::InstancePicker => handle_instance_picker_mode(app, key),
+        Mode::SessionPicker => handle_session_picker_mode(app, key, ws).await?,
+        Mode::InputPrompt(kind) => handle_input_prompt_mode(app, key, ws, kind.clone()).await?,
     }
 
     Ok(())
@@ -171,10 +178,6 @@ async fn handle_normal_mode(app: &mut App<'_>, key: KeyEvent, ws: &Option<WsClie
         }
         Pane::Input => {
             match key.code {
-                KeyCode::Char(':') => {
-                    app.mode = Mode::Command;
-                    app.input_buffer.clear();
-                }
                 KeyCode::Char('/') => {
                     app.mode = Mode::Filter;
                     app.input_buffer.clear();
@@ -205,38 +208,46 @@ async fn handle_normal_mode(app: &mut App<'_>, key: KeyEvent, ws: &Option<WsClie
                     app.should_quit = true;
                 }
                 KeyCode::Char('r') => {
-                    if let Some(client) = ws {
-                        let msg = OutgoingMessage::Command {
-                            id: Uuid::new_v4().to_string(),
-                            action: "hot_reload".to_string(),
-                            key: None,
-                        };
-                        let _ = client.send(msg).await;
+                    if app.is_app_running() {
+                        if let Some(client) = ws {
+                            let msg = OutgoingMessage::Command {
+                                id: Uuid::new_v4().to_string(),
+                                client_id: client.client_id().to_string(),
+                                action: "hot_reload".to_string(),
+                                key: None,
+                                data: None,
+                            };
+                            let _ = client.send(msg).await;
+                        }
                     }
                 }
                 KeyCode::Char('R') => {
-                    if let Some(client) = ws {
-                        let msg = OutgoingMessage::Command {
-                            id: Uuid::new_v4().to_string(),
-                            action: "hot_restart".to_string(),
-                            key: None,
-                        };
-                        let _ = client.send(msg).await;
+                    if app.is_app_running() {
+                        if let Some(client) = ws {
+                            let msg = OutgoingMessage::Command {
+                                id: Uuid::new_v4().to_string(),
+                                client_id: client.client_id().to_string(),
+                                action: "hot_restart".to_string(),
+                                key: None,
+                                data: None,
+                            };
+                            let _ = client.send(msg).await;
+                        }
                     }
                 }
                 KeyCode::Char('t') => {
-                    if let Some(client) = ws {
-                        let msg = OutgoingMessage::Command {
-                            id: Uuid::new_v4().to_string(),
-                            action: "get_tree".to_string(),
-                            key: None,
-                        };
-                        let _ = client.send(msg).await;
+                    if app.is_app_running() {
+                        if let Some(client) = ws {
+                            let msg = OutgoingMessage::Command {
+                                id: Uuid::new_v4().to_string(),
+                                client_id: client.client_id().to_string(),
+                                action: "get_tree".to_string(),
+                                key: None,
+                                data: None,
+                            };
+                            let _ = client.send(msg).await;
+                        }
                     }
-                }
-                KeyCode::Char(':') => {
-                    app.mode = Mode::Command;
-                    app.input_buffer.clear();
                 }
                 KeyCode::Char('/') => {
                     app.mode = Mode::Filter;
@@ -272,8 +283,30 @@ async fn handle_normal_mode(app: &mut App<'_>, key: KeyEvent, ws: &Option<WsClie
                 KeyCode::Char('h') | KeyCode::Left => {
                     app.prev_tab();
                 }
-                KeyCode::Char('i') => {
-                    app.mode = Mode::InstancePicker;
+                KeyCode::Char('s') => {
+                    app.mode = Mode::SessionPicker;
+                }
+                // Run app (play) - show device prompt
+                KeyCode::Char('p') => {
+                    if !app.is_app_running() && app.has_session() {
+                        app.mode = Mode::InputPrompt(InputPromptKind::RunApp);
+                        app.input_buffer.clear();
+                    }
+                }
+                // Stop app
+                KeyCode::Char('x') => {
+                    if app.is_app_running() {
+                        if let Some(client) = ws {
+                            let msg = OutgoingMessage::Command {
+                                id: Uuid::new_v4().to_string(),
+                                client_id: client.client_id().to_string(),
+                                action: "stop_app".to_string(),
+                                key: None,
+                                data: None,
+                            };
+                            let _ = client.send(msg).await;
+                        }
+                    }
                 }
                 KeyCode::Tab => {
                     app.selected_pane = if app.tree.is_some() {
@@ -300,10 +333,6 @@ async fn handle_global_keys(app: &mut App<'_>, key: KeyEvent, _ws: &Option<WsCli
         KeyCode::Char('Q') => {
             app.should_quit = true;
         }
-        KeyCode::Char(':') => {
-            app.mode = Mode::Command;
-            app.input_buffer.clear();
-        }
         KeyCode::Char('?') => {
             app.mode = Mode::Help;
         }
@@ -312,31 +341,61 @@ async fn handle_global_keys(app: &mut App<'_>, key: KeyEvent, _ws: &Option<WsCli
     Ok(())
 }
 
+// Command mode - currently unused, hotkey-driven UI instead
+/*
 async fn handle_command_mode(app: &mut App<'_>, key: KeyEvent, ws: &Option<WsClient>) -> Result<()> {
     match key.code {
         KeyCode::Esc => {
             app.mode = Mode::Normal;
             app.input_buffer.clear();
+            app.completions.clear();
+            app.completion_index = 0;
+        }
+        KeyCode::Tab => {
+            if app.completions.is_empty() {
+                app.update_completions();
+            } else {
+                app.cycle_completion_next();
+            }
+        }
+        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if !app.completions.is_empty() {
+                app.cycle_completion_next();
+            }
+        }
+        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if !app.completions.is_empty() {
+                app.cycle_completion_prev();
+            }
         }
         KeyCode::Enter => {
-            let input = app.input_buffer.clone();
-            app.input_buffer.clear();
-            app.mode = Mode::Normal;
+            if !app.completions.is_empty() {
+                app.accept_completion();
+            } else {
+                let input = app.input_buffer.clone();
+                app.input_buffer.clear();
+                app.completions.clear();
+                app.completion_index = 0;
+                app.mode = Mode::Normal;
 
-            if !input.is_empty() {
-                execute_command(app, &input, ws).await?;
+                if !input.is_empty() {
+                    execute_command(app, &input, ws).await?;
+                }
             }
         }
         KeyCode::Backspace => {
             app.input_buffer.pop();
+            app.update_completions();
         }
         KeyCode::Char(c) => {
             app.input_buffer.push(c);
+            app.update_completions();
         }
         _ => {}
     }
     Ok(())
 }
+*/
 
 fn handle_filter_mode(app: &mut App<'_>, key: KeyEvent) {
     match key.code {
@@ -402,6 +461,7 @@ async fn send_agent_message(app: &mut App<'_>, ws: &Option<WsClient>, intent: &s
         let is_answer = app.conversation_id.is_some();
         let msg = OutgoingMessage::AgentMessage {
             id: Uuid::new_v4().to_string(),
+            client_id: client.client_id().to_string(),
             intent: if is_answer { String::new() } else { intent.to_string() },
             answer: if is_answer { Some(intent.to_string()) } else { None },
             conversation_id: app.conversation_id.clone(),
@@ -437,33 +497,144 @@ fn handle_confirm_mode(app: &mut App<'_>, key: KeyEvent, action: ConfirmAction) 
     }
 }
 
-fn handle_instance_picker_mode(app: &mut App<'_>, key: KeyEvent) {
+async fn handle_session_picker_mode(
+    app: &mut App<'_>,
+    key: KeyEvent,
+    ws: &Option<WsClient>,
+) -> Result<()> {
     match key.code {
         KeyCode::Char('j') | KeyCode::Down => {
-            app.instance_picker_down();
+            app.session_picker_down();
         }
         KeyCode::Char('k') | KeyCode::Up => {
-            app.instance_picker_up();
+            app.session_picker_up();
         }
         KeyCode::Enter => {
-            app.instance_picker_select();
+            if let Some(session) = app.sessions.get(app.session_picker_index) {
+                if let Some(client) = ws {
+                    let msg = OutgoingMessage::Command {
+                        id: Uuid::new_v4().to_string(),
+                        client_id: client.client_id().to_string(),
+                        action: "connect_session".to_string(),
+                        key: None,
+                        data: Some(serde_json::json!({ "sessionId": session.id })),
+                    };
+                    let _ = client.send(msg).await;
+                }
+            }
+            app.session_picker_select();
         }
-        KeyCode::Esc => {
+        KeyCode::Esc | KeyCode::Char('q') => {
             app.mode = Mode::Normal;
+        }
+        // Create new session
+        KeyCode::Char('c') => {
+            app.input_buffer.clear();
+            app.mode = Mode::InputPrompt(InputPromptKind::CreateSession);
+        }
+        // Delete selected session
+        KeyCode::Char('d') | KeyCode::Char('x') => {
+            if let Some(session) = app.sessions.get(app.session_picker_index) {
+                if let Some(client) = ws {
+                    let msg = OutgoingMessage::Command {
+                        id: Uuid::new_v4().to_string(),
+                        client_id: client.client_id().to_string(),
+                        action: "destroy_session".to_string(),
+                        key: None,
+                        data: Some(serde_json::json!({ "sessionId": session.id })),
+                    };
+                    let _ = client.send(msg).await;
+                }
+            }
         }
         _ => {}
     }
+    Ok(())
+}
+
+async fn handle_input_prompt_mode(
+    app: &mut App<'_>,
+    key: KeyEvent,
+    ws: &Option<WsClient>,
+    kind: InputPromptKind,
+) -> Result<()> {
+    match key.code {
+        KeyCode::Esc => {
+            app.input_buffer.clear();
+            // Return to appropriate mode
+            match kind {
+                InputPromptKind::CreateSession => app.mode = Mode::SessionPicker,
+                InputPromptKind::RunApp => app.mode = Mode::Normal,
+            }
+        }
+        KeyCode::Enter => {
+            let input = app.input_buffer.clone();
+            app.input_buffer.clear();
+
+            match kind {
+                InputPromptKind::CreateSession => {
+                    if !input.is_empty() {
+                        if let Some(client) = ws {
+                            // Use project path from app.project
+                            let project_path = app.project.path.to_string_lossy().to_string();
+                            let msg = OutgoingMessage::Command {
+                                id: Uuid::new_v4().to_string(),
+                                client_id: client.client_id().to_string(),
+                                action: "create_session".to_string(),
+                                key: None,
+                                data: Some(serde_json::json!({
+                                    "name": input,
+                                    "projectPath": project_path,
+                                })),
+                            };
+                            let _ = client.send(msg).await;
+                        }
+                    }
+                    app.mode = Mode::SessionPicker;
+                }
+                InputPromptKind::RunApp => {
+                    if let Some(client) = ws {
+                        // Device is optional - empty string means default device
+                        let data = if input.is_empty() {
+                            None
+                        } else {
+                            Some(serde_json::json!({ "device": input }))
+                        };
+                        let msg = OutgoingMessage::Command {
+                            id: Uuid::new_v4().to_string(),
+                            client_id: client.client_id().to_string(),
+                            action: "run_app".to_string(),
+                            key: None,
+                            data,
+                        };
+                        let _ = client.send(msg).await;
+                    }
+                    app.mode = Mode::Normal;
+                }
+            }
+        }
+        KeyCode::Backspace => {
+            app.input_buffer.pop();
+        }
+        KeyCode::Char(c) => {
+            app.input_buffer.push(c);
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn current_event_count(app: &App) -> usize {
     use crate::app::ContentTab;
     match app.content_tab {
-        ContentTab::Logs => app.filtered_logs().count(),
-        ContentTab::Interactions => app.filtered_interactions().count(),
-        ContentTab::Ai => app.filtered_ai_events().count(),
+        ContentTab::Session => app.filtered_session_logs().count(),
+        ContentTab::Flutter => app.filtered_flutter_logs().count(),
+        ContentTab::Agent => app.filtered_agent_events().count(),
     }
 }
 
+// Keep execute_command for potential future use, but it's not used in hotkey-driven UI
+#[allow(dead_code)]
 async fn execute_command(app: &mut App<'_>, input: &str, ws: &Option<WsClient>) -> Result<()> {
     let command = parse_command(input);
 
@@ -475,8 +646,10 @@ async fn execute_command(app: &mut App<'_>, input: &str, ws: &Option<WsClient>) 
             if let Some(client) = ws {
                 let msg = OutgoingMessage::Command {
                     id: Uuid::new_v4().to_string(),
+                    client_id: client.client_id().to_string(),
                     action: "hot_reload".to_string(),
                     key: None,
+                    data: None,
                 };
                 let _ = client.send(msg).await;
             }
@@ -485,25 +658,23 @@ async fn execute_command(app: &mut App<'_>, input: &str, ws: &Option<WsClient>) 
             if let Some(client) = ws {
                 let msg = OutgoingMessage::Command {
                     id: Uuid::new_v4().to_string(),
+                    client_id: client.client_id().to_string(),
                     action: "hot_restart".to_string(),
                     key: None,
+                    data: None,
                 };
                 let _ = client.send(msg).await;
             }
         }
-        TuiCommand::Run { project, device } => {
+        TuiCommand::Run { device } => {
             if let Some(client) = ws {
-                let mut data = serde_json::json!({});
-                if let Some(p) = project {
-                    data["projectPath"] = p.into();
-                }
-                if let Some(d) = device {
-                    data["device"] = d.into();
-                }
+                let data = device.map(|d| serde_json::json!({ "device": d }));
                 let msg = OutgoingMessage::Command {
                     id: Uuid::new_v4().to_string(),
-                    action: "run".to_string(),
+                    client_id: client.client_id().to_string(),
+                    action: "run_app".to_string(),
                     key: None,
+                    data,
                 };
                 let _ = client.send(msg).await;
             }
@@ -512,8 +683,10 @@ async fn execute_command(app: &mut App<'_>, input: &str, ws: &Option<WsClient>) 
             if let Some(client) = ws {
                 let msg = OutgoingMessage::Command {
                     id: Uuid::new_v4().to_string(),
-                    action: "stop".to_string(),
+                    client_id: client.client_id().to_string(),
+                    action: "stop_app".to_string(),
                     key: None,
+                    data: None,
                 };
                 let _ = client.send(msg).await;
             }
@@ -522,8 +695,10 @@ async fn execute_command(app: &mut App<'_>, input: &str, ws: &Option<WsClient>) 
             if let Some(client) = ws {
                 let msg = OutgoingMessage::Command {
                     id: Uuid::new_v4().to_string(),
-                    action: "status".to_string(),
+                    client_id: client.client_id().to_string(),
+                    action: "get_status".to_string(),
                     key: None,
+                    data: None,
                 };
                 let _ = client.send(msg).await;
             }
@@ -532,8 +707,61 @@ async fn execute_command(app: &mut App<'_>, input: &str, ws: &Option<WsClient>) 
             if let Some(client) = ws {
                 let msg = OutgoingMessage::Command {
                     id: Uuid::new_v4().to_string(),
+                    client_id: client.client_id().to_string(),
                     action: "get_tree".to_string(),
                     key: None,
+                    data: None,
+                };
+                let _ = client.send(msg).await;
+            }
+        }
+        TuiCommand::CreateSession { name, project_path } => {
+            if let Some(client) = ws {
+                let msg = OutgoingMessage::Command {
+                    id: Uuid::new_v4().to_string(),
+                    client_id: client.client_id().to_string(),
+                    action: "create_session".to_string(),
+                    key: None,
+                    data: Some(serde_json::json!({
+                        "name": name,
+                        "projectPath": project_path,
+                    })),
+                };
+                let _ = client.send(msg).await;
+            }
+        }
+        TuiCommand::ListSessions => {
+            if let Some(client) = ws {
+                let msg = OutgoingMessage::Command {
+                    id: Uuid::new_v4().to_string(),
+                    client_id: client.client_id().to_string(),
+                    action: "list_sessions".to_string(),
+                    key: None,
+                    data: None,
+                };
+                let _ = client.send(msg).await;
+            }
+        }
+        TuiCommand::Connect { session } => {
+            if let Some(client) = ws {
+                let msg = OutgoingMessage::Command {
+                    id: Uuid::new_v4().to_string(),
+                    client_id: client.client_id().to_string(),
+                    action: "connect_session".to_string(),
+                    key: None,
+                    data: Some(serde_json::json!({ "sessionId": session })),
+                };
+                let _ = client.send(msg).await;
+            }
+        }
+        TuiCommand::DestroySession { session } => {
+            if let Some(client) = ws {
+                let msg = OutgoingMessage::Command {
+                    id: Uuid::new_v4().to_string(),
+                    client_id: client.client_id().to_string(),
+                    action: "destroy_session".to_string(),
+                    key: None,
+                    data: Some(serde_json::json!({ "sessionId": session })),
                 };
                 let _ = client.send(msg).await;
             }
@@ -549,6 +777,7 @@ async fn execute_command(app: &mut App<'_>, input: &str, ws: &Option<WsClient>) 
             if let Some(client) = ws {
                 let msg = OutgoingMessage::AgentMessage {
                     id: Uuid::new_v4().to_string(),
+                    client_id: client.client_id().to_string(),
                     intent,
                     answer,
                     conversation_id: app.conversation_id.clone(),
@@ -570,14 +799,27 @@ async fn execute_command(app: &mut App<'_>, input: &str, ws: &Option<WsClient>) 
 
 fn handle_ws_event(app: &mut App<'_>, event: WsEvent) {
     match event {
-        WsEvent::Connected { instance_id: _ } => {
+        WsEvent::Connected {
+            client_id: _,
+            daemon_version,
+            sessions,
+        } => {
             app.ws_state = WsState::Connected;
+            tracing::info!("Connected to daemon v{}", daemon_version);
+            // Convert SessionSummary to Session for the app
+            let sessions: Vec<Session> = sessions
+                .into_iter()
+                .map(|s| session_from_summary(s))
+                .collect();
+            app.set_sessions(sessions);
         }
         WsEvent::Disconnected => {
             app.ws_state = WsState::Disconnected;
+            app.push_toast(crate::app::Toast::error("Disconnected from server"));
         }
         WsEvent::Error(e) => {
             tracing::error!("WebSocket error: {}", e);
+            app.push_toast(crate::app::Toast::error(format!("WebSocket: {}", e)));
         }
         WsEvent::Message(msg) => match msg {
             IncomingMessage::CommandResponse(resp) => {
@@ -590,6 +832,19 @@ fn handle_ws_event(app: &mut App<'_>, event: WsEvent) {
                 app.push_event(event);
             }
         },
+    }
+}
+
+fn session_from_summary(s: SessionSummary) -> Session {
+    Session {
+        id: s.id,
+        name: s.name,
+        project_path: s.project_path,
+        app_status: s.app_status,
+        vm_service_uri: None,
+        pid: None,
+        created_at: String::new(),
+        last_active_at: String::new(),
     }
 }
 
@@ -673,7 +928,9 @@ mod tests {
         handle_ws_event(
             &mut app,
             WsEvent::Connected {
-                instance_id: Some("test-123".to_string()),
+                client_id: "test-client-123".to_string(),
+                daemon_version: "0.1.0".to_string(),
+                sessions: vec![],
             },
         );
 

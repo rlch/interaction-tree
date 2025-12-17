@@ -11,24 +11,24 @@ use ratatui::{
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let t = theme();
-    let ai_events: Vec<&MonitoringEvent> = app.filtered_ai_events().collect();
-    let event_count = ai_events.len();
+    let agent_events: Vec<&MonitoringEvent> = app.filtered_agent_events().collect();
+    let event_count = agent_events.len();
 
     let inner_height = area.height.saturating_sub(2) as usize;
     let visible_start = app.scroll_offset;
     let visible_end = (visible_start + inner_height).min(event_count);
 
-    let lines: Vec<Line> = ai_events
+    let lines: Vec<Line> = agent_events
         .iter()
         .skip(visible_start)
         .take(inner_height)
-        .map(|e| format_ai_event(e))
+        .map(|e| format_agent_event(e))
         .collect();
 
     let title = if let Some(ref filter) = app.filter {
-        format!(" AI [{}/{}] filter: {} ", visible_end, event_count, filter)
+        format!(" Agent [{}/{}] filter: {} ", visible_end, event_count, filter)
     } else {
-        format!(" AI [{}] ", event_count)
+        format!(" Agent [{}] ", event_count)
     };
 
     let block = Block::default()
@@ -40,7 +40,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
-fn format_ai_event(event: &MonitoringEvent) -> Line<'static> {
+fn format_agent_event(event: &MonitoringEvent) -> Line<'static> {
     let t = theme();
 
     let (icon, icon_color, message) = match event.event_type.to_lowercase().as_str() {

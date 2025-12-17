@@ -13,7 +13,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let t = theme();
 
     let mut spans = vec![Span::styled(
-        " IT Monitor",
+        " Fleeter",
         Style::default().fg(t.title).add_modifier(Modifier::BOLD),
     )];
 
@@ -26,11 +26,17 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(t.info),
     ));
 
-    // Selected instance
-    if let Some(ref instance) = app.selected_instance {
+    // Selected session
+    if let Some(ref session_id) = app.selected_session {
+        let session_name = app
+            .sessions
+            .iter()
+            .find(|s| s.id == *session_id)
+            .map(|s| s.name.as_str())
+            .unwrap_or(session_id.as_str());
         spans.push(sep.clone());
         spans.push(Span::styled(
-            format!("@{}", truncate(instance, 12)),
+            format!("@{}", truncate(session_name, 12)),
             Style::default().fg(t.source_tree),
         ));
     }

@@ -1,16 +1,18 @@
+use ansi_to_tui::IntoText;
+
 use crate::app::{App, LogEntry, LogLevel};
 use crate::theme::theme;
 use ratatui::{
     layout::Rect,
     style::Style,
-    text::{Line, Span},
+    text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let t = theme();
-    let logs: Vec<&LogEntry> = app.filtered_logs().collect();
+    let logs: Vec<&LogEntry> = app.filtered_flutter_logs().collect();
     let log_count = logs.len();
 
     let inner_height = area.height.saturating_sub(2) as usize;
@@ -25,9 +27,9 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     let title = if let Some(ref filter) = app.filter {
-        format!(" Logs [{}/{}] filter: {} ", visible_end, log_count, filter)
+        format!(" Flutter [{}/{}] filter: {} ", visible_end, log_count, filter)
     } else {
-        format!(" Logs [{}] ", log_count)
+        format!(" Flutter [{}] ", log_count)
     };
 
     let block = Block::default()
@@ -42,32 +44,6 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 fn format_log_entry(entry: &LogEntry) -> Line<'static> {
     let t = theme();
 
-    if let Some(ref ansi_spans) = entry.ansi_spans {
-        let spans: Vec<Span> = ansi_spans
-            .iter()
-            .map(|s| {
-                let mut style = Style::default();
-                if let Some(fg) = s.fg {
-                    style = style.fg(fg);
-                }
-                if let Some(bg) = s.bg {
-                    style = style.bg(bg);
-                }
-                if s.bold {
-                    style = style.add_modifier(ratatui::style::Modifier::BOLD);
-                }
-                if s.italic {
-                    style = style.add_modifier(ratatui::style::Modifier::ITALIC);
-                }
-                if s.underline {
-                    style = style.add_modifier(ratatui::style::Modifier::UNDERLINED);
-                }
-                Span::styled(s.text.clone(), style)
-            })
-            .collect();
-        return Line::from(spans);
-    }
-
     let (level_icon, level_color) = match entry.level {
         LogLevel::Debug => ("○", t.text_dim),
         LogLevel::Info => ("•", t.text),
@@ -77,11 +53,23 @@ fn format_log_entry(entry: &LogEntry) -> Line<'static> {
 
     let ts = format_timestamp(&entry.ts);
 
-    Line::from(vec![
+    let prefix_spans = vec![
         Span::styled(format!("{} ", ts), Style::default().fg(t.text_dim)),
         Span::styled(format!("{} ", level_icon), Style::default().fg(level_color)),
-        Span::styled(entry.message.clone(), Style::default().fg(t.text)),
-    ])
+    ];
+
+    let message_text: Text<'static> = entry
+        .message
+        .as_bytes()
+        .into_text()
+        .unwrap_or_else(|_| Text::raw(entry.message.clone()));
+
+    let mut all_spans = prefix_spans;
+    for line in message_text.lines {
+        all_spans.extend(line.spans.into_iter().map(|s| s.into()));
+    }
+
+    Line::from(all_spans)
 }
 
 fn format_timestamp(ts: &str) -> String {

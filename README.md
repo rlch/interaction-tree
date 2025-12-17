@@ -137,6 +137,15 @@ InteractionContext(
 - [interaction_tree_driver](./packages/interaction_tree_driver) - Flutter Driver integration
 - [interaction_tree_mcp](./packages/interaction_tree_mcp) - MCP server for AI interactions
 
+## Daemon Architecture
+
+For production use with multiple clients (Amp threads, TUI), use the central daemon architecture:
+
+- [fleeter-daemon](./packages/fleeter-daemon) - Central daemon for session management
+- [fleeter-mcp-proxy](./packages/fleeter-mcp-proxy) - MCP proxy for LLM clients
+
+See [DAEMON_DESIGN.md](./DAEMON_DESIGN.md) for full architecture documentation.
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.

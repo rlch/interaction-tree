@@ -108,12 +108,13 @@ export declare function isFlutterLogEvent(event: MonitoringEvent): event is Flut
 export declare function isFlutterLifecycleEvent(event: MonitoringEvent): event is FlutterLifecycleEvent;
 export declare function isAgentToolCallEvent(event: MonitoringEvent): event is AgentToolCallEvent;
 export declare function isAgentToolResultEvent(event: MonitoringEvent): event is AgentToolResultEvent;
-export type CommandAction = 'hot_reload' | 'hot_restart' | 'stop' | 'flutter_key' | 'get_status' | 'get_tree';
+export type CommandAction = 'hot_reload' | 'hot_restart' | 'run' | 'stop' | 'flutter_key' | 'get_status' | 'get_tree' | 'create_session' | 'destroy_session' | 'list_sessions' | 'connect';
 export interface Command {
     type: 'command';
     id?: string;
     action: CommandAction;
     key?: string;
+    data?: Record<string, unknown>;
 }
 export interface AgentMessage {
     type: 'agent_message';

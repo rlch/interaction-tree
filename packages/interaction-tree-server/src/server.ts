@@ -51,7 +51,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   if (!config.disableMonitoring) {
     const monitorPort =
       config.monitorPort ??
-      parseInt(process.env.INTERACTION_TREE_MONITOR_PORT ?? '9000', 10);
+      parseInt(process.env.INTERACTION_TREE_MONITOR_PORT ?? '9877', 10);
     startMonitoringServer({ port: monitorPort });
     const monitor = getMonitor();
     console.error(

@@ -1,4 +1,4 @@
-use crate::app::{App, Mode, Pane};
+use crate::app::{App, InputPromptKind, Mode, Pane};
 use crate::theme::theme;
 use ratatui::{
     layout::Rect,
@@ -12,7 +12,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let t = theme();
 
     // Check if we're in answer mode
-    let in_answer_mode = app.in_answer_mode() && matches!(app.mode, Mode::Normal | Mode::Command | Mode::Input);
+    let in_answer_mode = app.in_answer_mode() && matches!(app.mode, Mode::Normal | Mode::Input);
 
     let bindings = if in_answer_mode {
         vec![("Enter", "answer"), ("Esc", "cancel")]
@@ -28,28 +28,44 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
                         ("q", "quit"),
                     ],
                     _ => {
-                        let mut bindings = vec![
-                            ("r", "reload"),
-                            ("R", "restart"),
-                            ("c", "clear"),
-                            ("q", "quit"),
-                            ("/", "filter"),
-                            (":", "command"),
-                            ("?", "help"),
-                            ("↑↓", "scroll"),
-                        ];
-                        if app.tree.is_none() {
-                            bindings.insert(0, ("t", "tree"));
+                        let mut bindings = vec![("s", "sessions")];
+                        
+                        if app.has_session() {
+                            if app.is_app_running() {
+                                bindings.push(("x", "stop"));
+                                bindings.push(("r", "reload"));
+                                bindings.push(("R", "restart"));
+                                if app.tree.is_none() {
+                                    bindings.push(("t", "tree"));
+                                }
+                            } else {
+                                bindings.push(("p", "run"));
+                            }
                         }
+                        
+                        bindings.push(("c", "clear"));
+                        bindings.push(("?", "help"));
                         bindings
                     }
                 }
             }
-            Mode::Command | Mode::Filter => vec![("Enter", "submit"), ("Esc", "cancel")],
+            Mode::Filter => vec![("Enter", "apply"), ("Esc", "cancel")],
             Mode::Input => vec![("Enter", "send"), ("Esc", "cancel")],
             Mode::Help => vec![("Esc", "close"), ("q", "quit")],
             Mode::Confirm(_) => vec![("y", "confirm"), ("n/Esc", "cancel")],
-            Mode::InstancePicker => vec![("↑↓", "select"), ("Enter", "confirm"), ("Esc", "cancel")],
+            Mode::SessionPicker => vec![
+                ("↑↓", "select"),
+                ("Enter", "connect"),
+                ("c", "create"),
+                ("d", "delete"),
+                ("Esc", "close"),
+            ],
+            Mode::InputPrompt(kind) => {
+                match kind {
+                    InputPromptKind::CreateSession => vec![("Enter", "create"), ("Esc", "cancel")],
+                    InputPromptKind::RunApp => vec![("Enter", "run"), ("Esc", "cancel")],
+                }
+            }
         }
     };
 

@@ -1,11 +1,13 @@
-mod ai_pane;
+mod agent_pane;
+mod completion_popup;
+mod flutter_pane;
 mod help_bar;
 mod help_overlay;
 mod input_bar;
-mod instance_picker;
-mod interactions_pane;
-mod logs_pane;
+mod session_logs_pane;
+mod session_picker;
 mod status_bar;
+mod toasts;
 mod tree_pane;
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -51,14 +53,20 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     input_bar::render(frame, app, chunks[2]);
     help_bar::render(frame, app, chunks[3]);
 
+    // Completion popup (above input bar)
+    completion_popup::render(frame, app, chunks[2]);
+
     // Overlays
     if matches!(app.mode, Mode::Help) {
         help_overlay::render(frame);
     }
 
-    if matches!(app.mode, Mode::InstancePicker) {
-        instance_picker::render(frame, app);
+    if matches!(app.mode, Mode::SessionPicker | Mode::InputPrompt(_)) {
+        session_picker::render(frame, app);
     }
+
+    // Toasts (always on top)
+    toasts::render(frame, app);
 }
 
 fn render_content_with_tabs(frame: &mut Frame, app: &App, area: Rect) {
@@ -74,7 +82,7 @@ fn render_content_with_tabs(frame: &mut Frame, app: &App, area: Rect) {
         .split(area);
 
     // Render tab bar
-    let tab_titles: Vec<Line> = [ContentTab::Logs, ContentTab::Interactions, ContentTab::Ai]
+    let tab_titles: Vec<Line> = [ContentTab::Session, ContentTab::Flutter, ContentTab::Agent]
         .iter()
         .map(|tab| {
             let is_active = app.content_tab == *tab;
@@ -90,9 +98,9 @@ fn render_content_with_tabs(frame: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     let selected_index = match app.content_tab {
-        ContentTab::Logs => 0,
-        ContentTab::Interactions => 1,
-        ContentTab::Ai => 2,
+        ContentTab::Session => 0,
+        ContentTab::Flutter => 1,
+        ContentTab::Agent => 2,
     };
 
     let tabs = Tabs::new(tab_titles)
@@ -105,8 +113,8 @@ fn render_content_with_tabs(frame: &mut Frame, app: &App, area: Rect) {
 
     // Render active pane
     match app.content_tab {
-        ContentTab::Logs => logs_pane::render(frame, app, content_chunks[1]),
-        ContentTab::Interactions => interactions_pane::render(frame, app, content_chunks[1]),
-        ContentTab::Ai => ai_pane::render(frame, app, content_chunks[1]),
+        ContentTab::Session => session_logs_pane::render(frame, app, content_chunks[1]),
+        ContentTab::Flutter => flutter_pane::render(frame, app, content_chunks[1]),
+        ContentTab::Agent => agent_pane::render(frame, app, content_chunks[1]),
     }
 }

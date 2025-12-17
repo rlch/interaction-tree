@@ -1,4 +1,4 @@
-use crate::app::{App, ConfirmAction, Mode};
+use crate::app::{App, ConfirmAction, InputPromptKind, Mode};
 use crate::theme::theme;
 use ratatui::{
     layout::Rect,
@@ -18,6 +18,11 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         return render_confirm(frame, area, prompt);
     }
 
+    // Handle input prompt mode
+    if let Mode::InputPrompt(kind) = &app.mode {
+        return render_input_prompt(frame, app, area, kind);
+    }
+
     // Show waiting indicator when pending response
     if app.pending_response {
         return render_waiting(frame, app, area);
@@ -25,7 +30,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 
     // Check if we're in answer mode (needs_context flow)
     let in_answer_mode =
-        app.in_answer_mode() && matches!(app.mode, Mode::Normal | Mode::Command | Mode::Input);
+        app.in_answer_mode() && matches!(app.mode, Mode::Normal | Mode::Input);
 
     // For Input mode, use textarea; for others, use simple input_buffer
     if matches!(app.mode, Mode::Input) && !in_answer_mode {
@@ -64,23 +69,15 @@ fn render_simple_input(frame: &mut Frame, app: &App, area: Rect, in_answer_mode:
     } else {
         match &app.mode {
             Mode::Normal => (">", t.success, "Input"),
-            Mode::Command => (":", t.warning, "Command"),
             Mode::Filter => ("/", t.info, "Filter"),
             Mode::Input => (">", t.info, "Agent"),
             Mode::Help => (">", t.text_dim, "Help"),
-            Mode::InstancePicker => (">", t.text_dim, "Instance"),
-            Mode::Confirm(_) => unreachable!(),
+            Mode::SessionPicker => (">", t.text_dim, "Session"),
+            Mode::Confirm(_) | Mode::InputPrompt(_) => unreachable!(),
         }
     };
 
-    let cursor_style =
-        if matches!(app.mode, Mode::Command | Mode::Filter | Mode::Input) || in_answer_mode {
-            Style::default()
-                .fg(t.text)
-                .add_modifier(Modifier::RAPID_BLINK)
-        } else {
-            Style::default().fg(t.text_dim)
-        };
+
 
     // Build lines: question (if any) + input
     let mut lines = Vec::new();
@@ -96,11 +93,13 @@ fn render_simple_input(frame: &mut Frame, app: &App, area: Rect, in_answer_mode:
         }
     }
 
-    lines.push(Line::from(vec![
+    let input_spans = vec![
         Span::styled(format!("{} ", prefix), Style::default().fg(prefix_color)),
         Span::styled(app.input_buffer.clone(), Style::default().fg(t.text)),
-        Span::styled("█", cursor_style),
-    ]));
+    ];
+
+
+    lines.push(Line::from(input_spans));
 
     let border_color = if in_answer_mode { t.source_tree } else { t.border };
 
@@ -112,7 +111,7 @@ fn render_simple_input(frame: &mut Frame, app: &App, area: Rect, in_answer_mode:
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
 
-    if matches!(app.mode, Mode::Command | Mode::Filter | Mode::Input) || in_answer_mode {
+    if matches!(app.mode, Mode::Filter | Mode::Input) || in_answer_mode {
         let line_offset = if app.agent_question.is_some() && in_answer_mode {
             1
         } else {
@@ -144,6 +143,33 @@ fn render_confirm(frame: &mut Frame, area: Rect, prompt: &str) {
 
     let paragraph = Paragraph::new(line).block(block);
     frame.render_widget(paragraph, area);
+}
+
+fn render_input_prompt(frame: &mut Frame, app: &App, area: Rect, kind: &InputPromptKind) {
+    let t = theme();
+
+    let (prompt, title) = match kind {
+        InputPromptKind::CreateSession => ("Session name: ", "Create Session"),
+        InputPromptKind::RunApp => ("Device (optional): ", "Run App"),
+    };
+
+    let line = Line::from(vec![
+        Span::styled(prompt, Style::default().fg(t.text_dim)),
+        Span::styled(&app.input_buffer, Style::default().fg(t.text)),
+    ]);
+
+    let block = Block::default()
+        .title(format!(" {} ", title))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(t.info));
+
+    let paragraph = Paragraph::new(line).block(block);
+    frame.render_widget(paragraph, area);
+
+    // Show cursor
+    let cursor_x = area.x + 1 + prompt.len() as u16 + app.input_buffer.len() as u16;
+    let cursor_y = area.y + 1;
+    frame.set_cursor_position((cursor_x, cursor_y));
 }
 
 fn render_waiting(frame: &mut Frame, app: &App, area: Rect) {

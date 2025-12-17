@@ -4,7 +4,6 @@ pub enum TuiCommand {
     Reload,
     Restart,
     Run {
-        project: Option<String>,
         device: Option<String>,
     },
     Stop,
@@ -17,6 +16,18 @@ pub enum TuiCommand {
         answer: Option<String>,
     },
     Help,
+    // Session management
+    CreateSession {
+        name: String,
+        project_path: String,
+    },
+    ListSessions,
+    Connect {
+        session: String,
+    },
+    DestroySession {
+        session: String,
+    },
     Unknown(String),
 }
 
@@ -31,8 +42,8 @@ pub fn parse_command(input: &str) -> TuiCommand {
         "r" | "reload" => TuiCommand::Reload,
         "R" | "restart" => TuiCommand::Restart,
         "run" => {
-            let (project, device) = parse_run_args(args);
-            TuiCommand::Run { project, device }
+            let device = parse_run_args(args);
+            TuiCommand::Run { device }
         }
         "stop" => TuiCommand::Stop,
         "status" => TuiCommand::Status,
@@ -60,34 +71,67 @@ pub fn parse_command(input: &str) -> TuiCommand {
             }
         }
         "help" | "h" | "?" => TuiCommand::Help,
+        // Session management
+        "create" | "new" => {
+            if let Some((name, path)) = parse_create_session_args(args) {
+                TuiCommand::CreateSession {
+                    name,
+                    project_path: path,
+                }
+            } else {
+                TuiCommand::Unknown("create <name> <project_path>".to_string())
+            }
+        }
+        "sessions" | "ls" => TuiCommand::ListSessions,
+        "connect" | "use" => {
+            if let Some(session) = args {
+                TuiCommand::Connect {
+                    session: session.to_string(),
+                }
+            } else {
+                TuiCommand::Unknown("connect <session_name>".to_string())
+            }
+        }
+        "destroy" | "rm" => {
+            if let Some(session) = args {
+                TuiCommand::DestroySession {
+                    session: session.to_string(),
+                }
+            } else {
+                TuiCommand::Unknown("destroy <session_name>".to_string())
+            }
+        }
         "" => TuiCommand::Unknown(String::new()),
         other => TuiCommand::Unknown(other.to_string()),
     }
 }
 
-fn parse_run_args(args: Option<&str>) -> (Option<String>, Option<String>) {
+fn parse_run_args(args: Option<&str>) -> Option<String> {
     let Some(args) = args else {
-        return (None, None);
+        return None;
     };
 
-    let mut project = None;
-    let mut device = None;
-
     for part in args.split_whitespace() {
-        if let Some(p) = part.strip_prefix("--project=") {
-            project = Some(p.to_string());
-        } else if let Some(p) = part.strip_prefix("-p=") {
-            project = Some(p.to_string());
-        } else if let Some(d) = part.strip_prefix("--device=") {
-            device = Some(d.to_string());
+        if let Some(d) = part.strip_prefix("--device=") {
+            return Some(d.to_string());
         } else if let Some(d) = part.strip_prefix("-d=") {
-            device = Some(d.to_string());
-        } else if project.is_none() {
-            project = Some(part.to_string());
+            return Some(d.to_string());
         }
     }
 
-    (project, device)
+    // First arg is device if no flag
+    args.split_whitespace().next().map(String::from)
+}
+
+fn parse_create_session_args(args: Option<&str>) -> Option<(String, String)> {
+    let args = args?;
+    let mut parts = args.splitn(2, char::is_whitespace);
+    let name = parts.next()?.trim().to_string();
+    let path = parts.next()?.trim().to_string();
+    if name.is_empty() || path.is_empty() {
+        return None;
+    }
+    Some((name, path))
 }
 
 #[cfg(test)]
@@ -111,33 +155,68 @@ mod tests {
 
     #[test]
     fn test_parse_run_no_args() {
-        assert_eq!(
-            parse_command("run"),
-            TuiCommand::Run {
-                project: None,
-                device: None
-            }
-        );
+        assert_eq!(parse_command("run"), TuiCommand::Run { device: None });
     }
 
     #[test]
-    fn test_parse_run_with_project() {
+    fn test_parse_run_with_device() {
         assert_eq!(
-            parse_command("run /path/to/project"),
+            parse_command("run chrome"),
             TuiCommand::Run {
-                project: Some("/path/to/project".to_string()),
-                device: None
-            }
-        );
-    }
-
-    #[test]
-    fn test_parse_run_with_flags() {
-        assert_eq!(
-            parse_command("run --project=/path --device=chrome"),
-            TuiCommand::Run {
-                project: Some("/path".to_string()),
                 device: Some("chrome".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_run_with_device_flag() {
+        assert_eq!(
+            parse_command("run --device=macos"),
+            TuiCommand::Run {
+                device: Some("macos".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_create_session() {
+        assert_eq!(
+            parse_command("create my-app /path/to/flutter"),
+            TuiCommand::CreateSession {
+                name: "my-app".to_string(),
+                project_path: "/path/to/flutter".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_connect() {
+        assert_eq!(
+            parse_command("connect my-app"),
+            TuiCommand::Connect {
+                session: "my-app".to_string()
+            }
+        );
+        assert_eq!(
+            parse_command("use admin"),
+            TuiCommand::Connect {
+                session: "admin".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_sessions() {
+        assert_eq!(parse_command("sessions"), TuiCommand::ListSessions);
+        assert_eq!(parse_command("ls"), TuiCommand::ListSessions);
+    }
+
+    #[test]
+    fn test_parse_destroy() {
+        assert_eq!(
+            parse_command("destroy my-app"),
+            TuiCommand::DestroySession {
+                session: "my-app".to_string()
             }
         );
     }

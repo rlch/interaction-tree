@@ -1,0 +1,13 @@
+[Unit]
+Description=Fleeter Daemon - Flutter session management
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node /usr/lib/node_modules/fleeter-daemon/dist/bin/daemon.js
+Restart=always
+RestartSec=10
+Environment=FLEETER_PORT=9877
+
+[Install]
+WantedBy=default.target

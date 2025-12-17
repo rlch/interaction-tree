@@ -146,16 +146,22 @@ export function isAgentToolResultEvent(event: MonitoringEvent): event is AgentTo
 export type CommandAction =
   | 'hot_reload'
   | 'hot_restart'
+  | 'run'
   | 'stop'
   | 'flutter_key'
   | 'get_status'
-  | 'get_tree';
+  | 'get_tree'
+  | 'create_session'
+  | 'destroy_session'
+  | 'list_sessions'
+  | 'connect';
 
 export interface Command {
   type: 'command';
   id?: string;
   action: CommandAction;
   key?: string;
+  data?: Record<string, unknown>;
 }
 
 export interface AgentMessage {
