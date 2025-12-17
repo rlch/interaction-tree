@@ -9,11 +9,14 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { registerRawTools, registerAgentTools } from './modes/index.js';
 import { getVMClient } from './vm/client.js';
+import { startMonitoringServer, getMonitor } from './monitoring/index.js';
 
 export type ServerMode = 'agent' | 'raw';
 
 export interface ServerConfig {
   mode: ServerMode;
+  monitorPort?: number;
+  disableMonitoring?: boolean;
 }
 
 export function createServer(config: ServerConfig): Server {
@@ -51,6 +54,18 @@ export function createServer(config: ServerConfig): Server {
 export async function startServer(config: ServerConfig): Promise<void> {
   const server = createServer(config);
   const transport = new StdioServerTransport();
+
+  // Start monitoring WebSocket server unless disabled
+  if (!config.disableMonitoring) {
+    const monitorPort =
+      config.monitorPort ??
+      parseInt(process.env.INTERACTION_TREE_MONITOR_PORT ?? '9000', 10);
+    startMonitoringServer({ port: monitorPort });
+    const monitor = getMonitor();
+    console.error(
+      `[interaction-tree-server] Monitoring instance: ${monitor.getInstanceId()}`
+    );
+  }
 
   await server.connect(transport);
 

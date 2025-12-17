@@ -1,23 +1,104 @@
 /**
  * JSON Schema definitions for MCP tools.
  */
-export declare const connectSchema: {
+export declare const runSchema: {
     type: "object";
     properties: {
-        uri: {
+        projectPath: {
             type: string;
+            description: string;
+        };
+        name: {
+            type: string;
+            description: string;
+        };
+        device: {
+            type: string;
+            description: string;
+        };
+        flavor: {
+            type: string;
+            description: string;
+        };
+        target: {
+            type: string;
+            description: string;
+        };
+        dartDefines: {
+            type: string;
+            description: string;
+        };
+        additionalArgs: {
+            type: string;
+            items: {
+                type: string;
+            };
             description: string;
         };
     };
     required: string[];
 };
-export declare const disconnectSchema: {
+export declare const stopSchema: {
+    type: "object";
+    properties: {
+        instanceId: {
+            type: string;
+            description: string;
+        };
+    };
+};
+export declare const listSchema: {
     type: "object";
     properties: {};
+};
+export declare const rebuildSchema: {
+    type: "object";
+    properties: {
+        instanceId: {
+            type: string;
+            description: string;
+        };
+        projectPath: {
+            type: string;
+            description: string;
+        };
+        device: {
+            type: string;
+            description: string;
+        };
+        flavor: {
+            type: string;
+            description: string;
+        };
+        target: {
+            type: string;
+            description: string;
+        };
+        clean: {
+            type: string;
+            description: string;
+        };
+        dartDefines: {
+            type: string;
+            description: string;
+        };
+        additionalArgs: {
+            type: string;
+            items: {
+                type: string;
+            };
+            description: string;
+        };
+    };
+    required: string[];
 };
 export declare const getTreeSchema: {
     type: "object";
     properties: {
+        instanceId: {
+            type: string;
+            description: string;
+        };
         includeBounds: {
             type: string;
             description: string;
@@ -35,6 +116,10 @@ export declare const getTreeSchema: {
 export declare const targetIdSchema: {
     type: "object";
     properties: {
+        instanceId: {
+            type: string;
+            description: string;
+        };
         id: {
             type: string;
             description: string;
@@ -45,6 +130,10 @@ export declare const targetIdSchema: {
 export declare const enterTextSchema: {
     type: "object";
     properties: {
+        instanceId: {
+            type: string;
+            description: string;
+        };
         id: {
             type: string;
             description: string;
@@ -59,6 +148,10 @@ export declare const enterTextSchema: {
 export declare const scrollSchema: {
     type: "object";
     properties: {
+        instanceId: {
+            type: string;
+            description: string;
+        };
         id: {
             type: string;
             description: string;
@@ -77,6 +170,10 @@ export declare const scrollSchema: {
 export declare const scrollIntoViewSchema: {
     type: "object";
     properties: {
+        instanceId: {
+            type: string;
+            description: string;
+        };
         id: {
             type: string;
             description: string;
@@ -91,6 +188,10 @@ export declare const scrollIntoViewSchema: {
 export declare const waitForSchema: {
     type: "object";
     properties: {
+        instanceId: {
+            type: string;
+            description: string;
+        };
         id: {
             type: string;
             description: string;
@@ -110,6 +211,10 @@ export declare const waitForSchema: {
 export declare const executeActionSchema: {
     type: "object";
     properties: {
+        instanceId: {
+            type: string;
+            description: string;
+        };
         id: {
             type: string;
             description: string;
@@ -128,6 +233,10 @@ export declare const executeActionSchema: {
 export declare const batchSchema: {
     type: "object";
     properties: {
+        instanceId: {
+            type: string;
+            description: string;
+        };
         steps: {
             type: string;
             description: string;
@@ -178,6 +287,10 @@ export declare const batchSchema: {
 export declare const executeIntentSchema: {
     type: "object";
     properties: {
+        instanceId: {
+            type: string;
+            description: string;
+        };
         intent: {
             type: string;
             description: string;
@@ -202,20 +315,39 @@ export declare const executeIntentSchema: {
 };
 export declare const getStatusSchema: {
     type: "object";
-    properties: {};
+    properties: {
+        instanceId: {
+            type: string;
+            description: string;
+        };
+    };
 };
 export declare const hotReloadSchema: {
     type: "object";
-    properties: {};
+    properties: {
+        instanceId: {
+            type: string;
+            description: string;
+        };
+    };
 };
 export declare const hotRestartSchema: {
     type: "object";
-    properties: {};
+    properties: {
+        instanceId: {
+            type: string;
+            description: string;
+        };
+    };
 };
 export declare const getLogsSchema: {
     type: "object";
     properties: {
-        since: {
+        instanceId: {
+            type: string;
+            description: string;
+        };
+        maxLines: {
             type: string;
             description: string;
         };
@@ -224,6 +356,10 @@ export declare const getLogsSchema: {
 export declare const getErrorsSchema: {
     type: "object";
     properties: {
+        instanceId: {
+            type: string;
+            description: string;
+        };
         clear: {
             type: string;
             description: string;

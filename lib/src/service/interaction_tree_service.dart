@@ -7,6 +7,7 @@ import 'package:flutter/widgets.dart';
 import '../core/interactable_mixin.dart';
 import '../core/interaction_action.dart';
 import '../core/interaction_capability.dart';
+import '../core/interaction_context.dart';
 import '../core/interaction_key.dart';
 import '../core/interaction_target.dart';
 import 'interaction_executor.dart';
@@ -226,6 +227,12 @@ class InteractionTreeService {
 
         if (includeState) {
           json['state'] = target.getState();
+        }
+
+        // Collect ancestor InteractionContext descriptions
+        final contexts = InteractionContext.allOf(element);
+        if (contexts.isNotEmpty) {
+          json['context'] = contexts;
         }
 
         targets.add(json);

@@ -1,0 +1,20 @@
+// Interaction Tree Monitor-Only Layout
+// Usage: zellij --layout tui/layouts/monitor-only.kdl
+
+layout {
+    default_tab_template {
+        pane size=1 borderless=true {
+            plugin location="zellij:tab-bar"
+        }
+        children
+        pane size=2 borderless=true {
+            plugin location="zellij:status-bar"
+        }
+    }
+
+    tab name="monitor" focus=true {
+        pane name="it-tui" command="it-tui" focus=true {
+            args "--uri" "ws://127.0.0.1:9000"
+        }
+    }
+}

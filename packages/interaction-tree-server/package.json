@@ -5,7 +5,8 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "interaction-tree-server": "dist/index.js"
+    "interaction-tree-server": "dist/index.js",
+    "it-monitor": "dist/bin/monitor.js"
   },
   "scripts": {
     "build": "tsc",

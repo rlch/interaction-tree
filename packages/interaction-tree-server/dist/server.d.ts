@@ -8,6 +8,8 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 export type ServerMode = 'agent' | 'raw';
 export interface ServerConfig {
     mode: ServerMode;
+    monitorPort?: number;
+    disableMonitoring?: boolean;
 }
 export declare function createServer(config: ServerConfig): Server;
 export declare function startServer(config: ServerConfig): Promise<void>;

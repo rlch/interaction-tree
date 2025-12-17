@@ -1,0 +1,36 @@
+// Interaction Tree Development Layout
+// Usage: zellij --layout tui/layouts/dev.kdl
+
+layout {
+    default_tab_template {
+        pane size=1 borderless=true {
+            plugin location="zellij:tab-bar"
+        }
+        children
+        pane size=2 borderless=true {
+            plugin location="zellij:status-bar"
+        }
+    }
+
+    tab name="dev" focus=true {
+        pane split_direction="vertical" {
+            // Main code editing pane (70% width)
+            pane size="70%" name="editor" focus=true
+
+            // Right side: Flutter run output (30% width)
+            pane size="30%" name="flutter" {
+                // Run your Flutter app here:
+                // flutter run -d macos --dart-define=INTERACTION_TREE_ENABLED=true
+            }
+        }
+
+        // Bottom: IT-TUI monitoring (30% height)
+        pane size="30%" name="monitor" command="it-tui" {
+            args "--uri" "ws://127.0.0.1:9000"
+        }
+    }
+
+    tab name="git" {
+        pane name="git"
+    }
+}
