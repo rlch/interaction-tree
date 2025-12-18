@@ -81,7 +81,26 @@ pub struct TreeNode {
     #[serde(default)]
     pub widget_type: Option<String>,
     #[serde(default)]
+    pub capabilities: Vec<Capability>,
+    #[serde(default)]
+    pub actions: Vec<Action>,
+    #[serde(default)]
     pub children: Vec<TreeNode>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Capability {
+    #[serde(rename = "type")]
+    pub capability_type: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Action {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -803,6 +822,35 @@ impl App {
             .filter_map(|t| {
                 let id = t.get("id")?.as_str()?.to_string();
                 let widget_type = t.get("widgetType").and_then(|w| w.as_str()).map(String::from);
+                let capabilities = t
+                    .get("capabilities")
+                    .and_then(|c| c.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|cap| {
+                                cap.get("type")
+                                    .and_then(|t| t.as_str())
+                                    .map(|s| Capability { capability_type: s.to_string() })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let actions = t
+                    .get("actions")
+                    .and_then(|a| a.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|act| {
+                                act.get("name")
+                                    .and_then(|n| n.as_str())
+                                    .map(|name| Action {
+                                        name: name.to_string(),
+                                        description: act.get("description").and_then(|d| d.as_str()).map(String::from),
+                                    })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 let children = t
                     .get("children")
                     .and_then(|c| c.as_array())
@@ -811,6 +859,8 @@ impl App {
                 Some(TreeNode {
                     id,
                     widget_type,
+                    capabilities,
+                    actions,
                     children,
                 })
             })

@@ -36,8 +36,8 @@ impl Schema {
             id: node.id.clone(),
             description: None,
             widget_type: node.widget_type.clone(),
-            capabilities: Vec::new(),
-            actions: Vec::new(),
+            capabilities: node.capabilities.iter().map(|c| c.capability_type.clone()).collect(),
+            actions: node.actions.iter().map(|a| a.name.clone()).collect(),
         }
     }
 }
@@ -477,6 +477,8 @@ mod tests {
         TreeNode {
             id: id.to_string(),
             widget_type: None,
+            capabilities: Vec::new(),
+            actions: Vec::new(),
             children,
         }
     }
@@ -485,6 +487,8 @@ mod tests {
         TreeNode {
             id: id.to_string(),
             widget_type: Some(widget_type.to_string()),
+            capabilities: Vec::new(),
+            actions: Vec::new(),
             children,
         }
     }
