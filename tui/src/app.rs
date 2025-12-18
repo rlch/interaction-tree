@@ -459,43 +459,43 @@ impl App {
     fn handle_session_status_event(&mut self, payload: &serde_json::Value) {
        let event_session_id = payload.get("sessionId").and_then(|s| s.as_str());
        let status = payload.get("status").and_then(|s| s.as_str());
+       let pid = payload.get("pid").and_then(|p| p.as_u64());
+       let uri = payload.get("vmServiceUri").and_then(|u| u.as_str());
        
-       tracing::debug!(
+       tracing::info!(
            event_session_id = ?event_session_id,
            selected_session = ?self.selected_session,
            status = ?status,
+           pid = ?pid,
+           uri = ?uri,
            "handle_session_status_event"
        );
 
-       // Check if this event is for our selected session
-       if let Some(session_id) = event_session_id {
-           if self.selected_session.as_deref() != Some(session_id) {
-               tracing::debug!("Ignoring status event for different session");
-               return;
-           }
-       }
-
-       // Update the Session in the sessions list (single source of truth)
+       // Update the Session in the sessions list (always, not just selected session)
+       // This ensures we have accurate state when user switches sessions
        if let Some(session_id) = event_session_id {
            if let Some(session) = self.sessions.iter_mut().find(|s| s.id == session_id) {
                if let Some(status) = status {
-                   tracing::info!(status = status, "Updating session.app_status");
+                   tracing::info!(session_id = session_id, status = status, "Updating session.app_status");
                    session.app_status = status.to_string();
                }
-               if let Some(pid) = payload.get("pid").and_then(|p| p.as_u64()) {
+               if let Some(pid) = pid {
                    session.pid = Some(pid as u32);
                }
-               if let Some(uri) = payload.get("vmServiceUri").and_then(|u| u.as_str()) {
+               if let Some(uri) = uri {
                    session.vm_service_uri = Some(uri.to_string());
                }
                
-               // Auto-fetch tree when app starts running
-               if status == Some("running") && self.session.tree.is_none() {
+               // Auto-fetch tree when selected session starts running
+               if self.selected_session.as_deref() == Some(session_id) 
+                   && status == Some("running") 
+                   && self.session.tree.is_none() 
+               {
                    self.needs_tree_fetch = true;
                }
            }
        }
-       }
+    }
 
     pub fn filtered_interaction_logs(&self) -> impl Iterator<Item = &LogEntry> {
         let filter = self.filter.clone();

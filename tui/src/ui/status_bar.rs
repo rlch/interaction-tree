@@ -34,15 +34,22 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         // Show app status from Session struct (single source of truth)
         match session.app_status.as_str() {
             "running" => {
-                let pid = session.pid.unwrap_or(0);
-                let uri = session.vm_service_uri.as_deref().unwrap_or("");
                 left_spans.push(sep.clone());
-                left_spans.push(Span::styled(
-                    format!("pid {} ", pid),
-                    Style::default().fg(t.success),
-                ));
-                if !uri.is_empty() {
-                    left_spans.push(Span::styled(uri.to_string(), Style::default().fg(t.text_dim)));
+                if let Some(pid) = session.pid {
+                    left_spans.push(Span::styled(
+                        format!("pid {} ", pid),
+                        Style::default().fg(t.success),
+                    ));
+                } else {
+                    left_spans.push(Span::styled(
+                        "running ",
+                        Style::default().fg(t.success),
+                    ));
+                }
+                if let Some(uri) = &session.vm_service_uri {
+                    if !uri.is_empty() {
+                        left_spans.push(Span::styled(uri.clone(), Style::default().fg(t.text_dim)));
+                    }
                 }
             }
             "starting" => {
