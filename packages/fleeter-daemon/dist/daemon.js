@@ -23,7 +23,8 @@ export class Daemon {
     setupFlutterEvents() {
         this.flutterManager.on('started', async (sessionId, vmServiceUri) => {
             log.daemon.info({ sessionId, vmServiceUri }, 'Flutter app started');
-            this.sessionManager.updateStatus(sessionId, 'running', { vmServiceUri });
+            const flutterProcess = this.flutterManager.getProcess(sessionId);
+            this.sessionManager.updateStatus(sessionId, 'running', { vmServiceUri, pid: flutterProcess?.pid });
             // Connect VM client
             const vmClient = new VMServiceClient();
             try {
@@ -66,6 +67,11 @@ export class Daemon {
             catch (err) {
                 log.daemon.error({ sessionId, err }, 'Failed to connect VM client');
             }
+        });
+        this.flutterManager.on('launching', (sessionId, info) => {
+            log.daemon.info({ sessionId, ...info }, 'Flutter app launching');
+            // Broadcast launching event with device info
+            this.server.broadcastEvent('flutter', 'flutter.launching', info, sessionId);
         });
         this.flutterManager.on('exit', (sessionId) => {
             this.sessionManager.updateStatus(sessionId, 'stopped');

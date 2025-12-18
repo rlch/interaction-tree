@@ -12,7 +12,7 @@ use ratatui::Terminal;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::app::{App, ConfirmAction, ContentTab, InputPromptKind, Mode, Pane, WsState};
+use crate::app::{App, ConfirmAction, ContentTab, InputPromptKind, Mode, WsState};
 use crate::ws::protocol::Session;
 use crate::commands::{parse_command, TuiCommand};
 use crate::ui;
@@ -145,186 +145,178 @@ async fn handle_key_event(
 
 fn handle_mouse_event(app: &mut App, mouse: MouseEvent) {
     match mouse.kind {
-        MouseEventKind::ScrollUp => match app.selected_pane {
-            Pane::Content => app.scroll_up(),
-            Pane::Tree => app.tree_up(),
-        },
-        MouseEventKind::ScrollDown => match app.selected_pane {
-            Pane::Content => app.scroll_down(),
-            Pane::Tree => app.tree_down(),
-        },
+        MouseEventKind::ScrollUp => {
+            if app.content_tab == ContentTab::Tree {
+                app.tree_up();
+            } else {
+                app.scroll_up();
+            }
+        }
+        MouseEventKind::ScrollDown => {
+            if app.content_tab == ContentTab::Tree {
+                app.tree_down();
+            } else {
+                app.scroll_down();
+            }
+        }
         MouseEventKind::Down(MouseButton::Left) => {
-            // Future: implement pane focus detection based on coordinates
+            // Future: could detect click position to switch tabs
         }
         _ => {}
     }
 }
 
 async fn handle_normal_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>) -> Result<()> {
-    match app.selected_pane {
-        Pane::Tree => {
-            match key.code {
-                KeyCode::Char('j') | KeyCode::Down => {
-                    app.tree_down();
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    app.tree_up();
-                }
-                KeyCode::Char('h') | KeyCode::Left => {
-                    app.tree_left();
-                }
-                KeyCode::Char('l') | KeyCode::Right => {
-                    app.tree_right();
-                }
-                KeyCode::Enter | KeyCode::Char(' ') => {
-                    app.tree_toggle();
-                }
-                KeyCode::Tab => {
-                    app.selected_pane = Pane::Content;
-                }
-                KeyCode::Esc => {
-                    app.selected_pane = Pane::Content;
-                }
-                _ => handle_global_keys(app, key, ws).await?,
-            }
-        }
+    // Tree tab has special navigation (tree_up/down instead of scroll)
+    let on_tree_tab = app.content_tab == ContentTab::Tree;
 
-        Pane::Content => {
-            match key.code {
-                KeyCode::Char('q') => {
-                    app.mode = Mode::Confirm(ConfirmAction::Quit);
+    match key.code {
+        KeyCode::Char('q') => {
+            app.mode = Mode::Confirm(ConfirmAction::Quit);
+        }
+        KeyCode::Char('Q') => {
+            app.should_quit = true;
+        }
+        KeyCode::Char('r') => {
+            if app.is_app_running() {
+                if let Some(client) = ws {
+                    let msg = OutgoingMessage::Command {
+                        id: Uuid::new_v4().to_string(),
+                        client_id: client.client_id().to_string(),
+                        action: "hot_reload".to_string(),
+                        key: None,
+                        data: None,
+                    };
+                    let _ = client.send(msg).await;
+                    app.push_toast(crate::app::Toast::info("Hot reload triggered"));
                 }
-                KeyCode::Char('Q') => {
-                    app.should_quit = true;
-                }
-                KeyCode::Char('r') => {
-                    if app.is_app_running() {
-                        if let Some(client) = ws {
-                            let msg = OutgoingMessage::Command {
-                                id: Uuid::new_v4().to_string(),
-                                client_id: client.client_id().to_string(),
-                                action: "hot_reload".to_string(),
-                                key: None,
-                                data: None,
-                            };
-                            let _ = client.send(msg).await;
-                            app.push_toast(crate::app::Toast::info("Hot reload triggered"));
-                        }
-                    }
-                }
-                KeyCode::Char('R') => {
-                    if app.is_app_running() {
-                        if let Some(client) = ws {
-                            let msg = OutgoingMessage::Command {
-                                id: Uuid::new_v4().to_string(),
-                                client_id: client.client_id().to_string(),
-                                action: "hot_restart".to_string(),
-                                key: None,
-                                data: None,
-                            };
-                            let _ = client.send(msg).await;
-                            app.push_toast(crate::app::Toast::info("Hot restart triggered"));
-                        }
-                    }
-                }
-                KeyCode::Char('/') => {
-                    app.mode = Mode::Filter;
-                    app.input_buffer.clear();
-                }
-                KeyCode::Char('?') => {
-                    app.mode = Mode::Help;
-                }
-                KeyCode::Char('j') | KeyCode::Down => {
-                    app.scroll_down();
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    app.scroll_up();
-                }
-                KeyCode::Char('g') => {
-                    app.scroll_offset = 0;
-                }
-                KeyCode::Char('G') => {
-                    let count = current_event_count(app);
-                    if count > 0 {
-                        app.scroll_offset = count - 1;
-                    }
-                }
-                KeyCode::Char('c') => {
-                    app.clear_events();
-                }
-                KeyCode::Char('f') => {
-                    app.filter = None;
-                }
-                KeyCode::Char('l') | KeyCode::Right => {
-                    app.next_tab();
-                    // Auto-fetch tree when switching to Tree tab
-                    if app.content_tab == ContentTab::Tree && app.tree.is_none() && app.is_app_running() {
-                        if let Some(client) = ws {
-                            let msg = OutgoingMessage::Command {
-                                id: Uuid::new_v4().to_string(),
-                                client_id: client.client_id().to_string(),
-                                action: "get_tree".to_string(),
-                                key: None,
-                                data: None,
-                            };
-                            let _ = client.send(msg).await;
-                        }
-                    }
-                }
-                KeyCode::Char('h') | KeyCode::Left => {
-                    app.prev_tab();
-                    // Auto-fetch tree when switching to Tree tab
-                    if app.content_tab == ContentTab::Tree && app.tree.is_none() && app.is_app_running() {
-                        if let Some(client) = ws {
-                            let msg = OutgoingMessage::Command {
-                                id: Uuid::new_v4().to_string(),
-                                client_id: client.client_id().to_string(),
-                                action: "get_tree".to_string(),
-                                key: None,
-                                data: None,
-                            };
-                            let _ = client.send(msg).await;
-                        }
-                    }
-                }
-                KeyCode::Char('s') => {
-                    app.mode = Mode::SessionPicker;
-                }
-                // Run app (play) - show device prompt
-                KeyCode::Char('p') => {
-                    if !app.is_app_running() && app.has_session() {
-                        app.mode = Mode::InputPrompt(InputPromptKind::RunApp);
-                        app.input_buffer.clear();
-                    }
-                }
-                // Stop app
-                KeyCode::Char('x') => {
-                    if app.is_app_running() {
-                        if let Some(client) = ws {
-                            let msg = OutgoingMessage::Command {
-                                id: Uuid::new_v4().to_string(),
-                                client_id: client.client_id().to_string(),
-                                action: "stop_app".to_string(),
-                                key: None,
-                                data: None,
-                            };
-                            let _ = client.send(msg).await;
-                        }
-                    }
-                }
-                KeyCode::Tab => {
-                    if app.tree.is_some() {
-                        app.selected_pane = Pane::Tree;
-                    }
-                }
-                KeyCode::Esc => {
-                    app.filter = None;
-                }
-                _ => {}
             }
         }
+        KeyCode::Char('R') => {
+            if app.is_app_running() {
+                if let Some(client) = ws {
+                    let msg = OutgoingMessage::Command {
+                        id: Uuid::new_v4().to_string(),
+                        client_id: client.client_id().to_string(),
+                        action: "hot_restart".to_string(),
+                        key: None,
+                        data: None,
+                    };
+                    let _ = client.send(msg).await;
+                    app.push_toast(crate::app::Toast::info("Hot restart triggered"));
+                }
+            }
+        }
+        KeyCode::Char('/') => {
+            app.mode = Mode::Filter;
+            app.input_buffer.clear();
+        }
+        KeyCode::Char('?') => {
+            app.mode = Mode::Help;
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            if on_tree_tab {
+                app.tree_down();
+            } else {
+                app.scroll_down();
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if on_tree_tab {
+                app.tree_up();
+            } else {
+                app.scroll_up();
+            }
+        }
+        KeyCode::Char('g') => {
+            app.scroll_offset = 0;
+        }
+        KeyCode::Char('G') => {
+            let count = current_event_count(app);
+            if count > 0 {
+                app.scroll_offset = count - 1;
+            }
+        }
+        KeyCode::Char('c') => {
+            app.clear_events();
+        }
+        KeyCode::Char('f') => {
+            app.filter = None;
+        }
+        // Tab navigation: h/l always switch tabs, arrow keys do tree collapse/expand on Tree tab
+        KeyCode::Char('l') => {
+            app.next_tab();
+            maybe_fetch_tree(app, ws).await;
+        }
+        KeyCode::Char('h') => {
+            app.prev_tab();
+            maybe_fetch_tree(app, ws).await;
+        }
+        KeyCode::Right => {
+            if on_tree_tab {
+                app.tree_right(); // Expand node
+            } else {
+                app.next_tab();
+                maybe_fetch_tree(app, ws).await;
+            }
+        }
+        KeyCode::Left => {
+            if on_tree_tab {
+                app.tree_left(); // Collapse node
+            } else {
+                app.prev_tab();
+                maybe_fetch_tree(app, ws).await;
+            }
+        }
+        KeyCode::Enter | KeyCode::Char(' ') if on_tree_tab => {
+            app.tree_toggle();
+        }
+        KeyCode::Char('s') => {
+            app.mode = Mode::SessionPicker;
+        }
+        // Run app (play) - show device prompt
+        KeyCode::Char('p') => {
+            if !app.is_app_running() && app.has_session() {
+                app.mode = Mode::InputPrompt(InputPromptKind::RunApp);
+                app.input_buffer.clear();
+            }
+        }
+        // Stop app
+        KeyCode::Char('x') => {
+            if app.is_app_running() {
+                if let Some(client) = ws {
+                    let msg = OutgoingMessage::Command {
+                        id: Uuid::new_v4().to_string(),
+                        client_id: client.client_id().to_string(),
+                        action: "stop_app".to_string(),
+                        key: None,
+                        data: None,
+                    };
+                    let _ = client.send(msg).await;
+                }
+            }
+        }
+        KeyCode::Esc => {
+            app.filter = None;
+        }
+        _ => {}
     }
     Ok(())
+}
+
+async fn maybe_fetch_tree(app: &mut App, ws: &Option<WsClient>) {
+    if app.content_tab == ContentTab::Tree && app.tree.is_none() && app.is_app_running() {
+        if let Some(client) = ws {
+            let msg = OutgoingMessage::Command {
+                id: Uuid::new_v4().to_string(),
+                client_id: client.client_id().to_string(),
+                action: "get_tree".to_string(),
+                key: None,
+                data: None,
+            };
+            let _ = client.send(msg).await;
+        }
+    }
 }
 
 async fn handle_global_keys(app: &mut App, key: KeyEvent, _ws: &Option<WsClient>) -> Result<()> {

@@ -81,6 +81,12 @@ export class Daemon {
       }
     });
 
+    this.flutterManager.on('launching', (sessionId: string, info: { appId?: string; deviceId?: string }) => {
+      log.daemon.info({ sessionId, ...info }, 'Flutter app launching');
+      // Broadcast launching event with device info
+      this.server.broadcastEvent('flutter', 'flutter.launching', info, sessionId);
+    });
+
     this.flutterManager.on('exit', (sessionId: string) => {
       this.sessionManager.updateStatus(sessionId, 'stopped');
       const vmClient = this.vmClients.get(sessionId);

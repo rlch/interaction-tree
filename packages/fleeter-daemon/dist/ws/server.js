@@ -198,9 +198,12 @@ export class DaemonServer {
                         return;
                     }
                     const options = data;
+                    // Set status to 'starting' BEFORE awaiting runApp (which blocks until app.started)
+                    this.sessionManager.updateStatus(sessionId, 'starting');
                     const flutterProcess = await this.flutterManager.runApp(sessionId, session.projectPath, options ?? {});
-                    this.sessionManager.updateStatus(sessionId, 'starting', { pid: flutterProcess.pid });
-                    sendResponse({ success: true, data: { pid: flutterProcess.pid } });
+                    // runApp resolves when app.started is received, so now it's running
+                    this.sessionManager.updateStatus(sessionId, 'running', { pid: flutterProcess.pid, vmServiceUri: flutterProcess.vmServiceUri });
+                    sendResponse({ success: true, data: { pid: flutterProcess.pid, vmServiceUri: flutterProcess.vmServiceUri } });
                     break;
                 }
                 case 'stop_app': {

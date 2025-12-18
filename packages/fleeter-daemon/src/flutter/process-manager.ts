@@ -7,8 +7,7 @@ import { EventEmitter } from 'events';
 import { existsSync } from 'fs';
 import { join } from 'path';
 
-const VM_SERVICE_URI_REGEX =
-  /Observatory\s+(?:listening\s+on|debugger\s+and\s+profiler\s+available\s+at)\s+(wss?:\/\/\S+)/i;
+// DevTools URI may be printed as plain text even in --machine mode
 const DEVTOOLS_URI_REGEX =
   /Flutter DevTools.*?available at:\s+(https?:\/\/\S+)/i;
 
@@ -135,6 +134,10 @@ export class FlutterProcessManager extends EventEmitter {
                 if (event.event === 'app.start' && event.params) {
                   if (event.params.appId) flutterProcess.appId = event.params.appId as string;
                   if (event.params.deviceId) flutterProcess.deviceId = event.params.deviceId as string;
+                  this.emit('launching', sessionId, {
+                    appId: flutterProcess.appId,
+                    deviceId: flutterProcess.deviceId,
+                  });
                 }
 
                 // Capture VM service URI from app.debugPort event
@@ -155,12 +158,6 @@ export class FlutterProcessManager extends EventEmitter {
             } catch {
               // Not JSON
             }
-          }
-
-          // Fallback regex for VM service URI
-          if (!vmServiceUri) {
-            const match = line.match(VM_SERVICE_URI_REGEX);
-            if (match) vmServiceUri = match[1];
           }
 
           // Capture DevTools URI from plain text output
