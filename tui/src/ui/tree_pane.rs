@@ -46,7 +46,7 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
             )
             .highlight_symbol("▶ ");
 
-        frame.render_stateful_widget(tree_widget, area, &mut app.tree_state);
+        frame.render_stateful_widget(tree_widget, area, &mut app.session.tree_state);
     } else {
         let paragraph = Paragraph::new("No tree data (app not running?)")
             .style(Style::default().fg(t.text_dim))

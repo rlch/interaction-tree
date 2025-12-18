@@ -80,8 +80,9 @@ pub enum WsState {
     Connected,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum AppStatus {
+    #[default]
     Unknown,
     Starting,
     Running {
@@ -189,63 +190,7 @@ pub struct App {
     pub should_quit: bool,
 }
 
-// Convenience accessors to maintain API compatibility
-impl App {
-    #[inline]
-    pub fn app_status(&self) -> &AppStatus {
-        &self.session.app_status
-    }
 
-    #[inline]
-    pub fn flutter_logs(&self) -> &VecDeque<FlutterLogEntry> {
-        &self.session.flutter_logs
-    }
-
-    #[inline]
-    pub fn agent_events(&self) -> &VecDeque<MonitoringEvent> {
-        &self.session.agent_events
-    }
-
-    #[inline]
-    pub fn interaction_logs(&self) -> &VecDeque<LogEntry> {
-        &self.session.interaction_logs
-    }
-
-    #[inline]
-    pub fn tree(&self) -> Option<&InteractionTree> {
-        self.session.tree.as_ref()
-    }
-
-    #[inline]
-    pub fn tree_state(&self) -> &TreeState<String> {
-        &self.session.tree_state
-    }
-
-    #[inline]
-    pub fn tree_state_mut(&mut self) -> &mut TreeState<String> {
-        &mut self.session.tree_state
-    }
-
-    #[inline]
-    pub fn conversation_id(&self) -> Option<&String> {
-        self.session.conversation_id.as_ref()
-    }
-
-    #[inline]
-    pub fn agent_question(&self) -> Option<&String> {
-        self.session.agent_question.as_ref()
-    }
-
-    #[inline]
-    pub fn pending_response(&self) -> bool {
-        self.session.pending_response
-    }
-
-    #[inline]
-    pub fn last_agent_error(&self) -> Option<&String> {
-        self.session.last_agent_error.as_ref()
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct LogEntry {
@@ -536,34 +481,43 @@ impl App {
 
        if let Some(status) = status {
            tracing::info!(status = status, "Updating app_status");
-           match status {
-               "starting" => self.session.app_status = AppStatus::Starting,
-               "running" => {
-                    let pid = payload.get("pid").and_then(|p| p.as_u64()).unwrap_or(0) as u32;
-                    let uri = payload
-                        .get("vmServiceUri")
-                        .and_then(|u| u.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    self.session.app_status = AppStatus::Running { pid, uri };
-                    // Auto-fetch tree when app starts
-                    if self.session.tree.is_none() {
-                        self.needs_tree_fetch = true;
-                    }
+            
+            // Update local SessionState
+            match status {
+                "starting" => self.session.app_status = AppStatus::Starting,
+                "running" => {
+                     let pid = payload.get("pid").and_then(|p| p.as_u64()).unwrap_or(0) as u32;
+                     let uri = payload
+                         .get("vmServiceUri")
+                         .and_then(|u| u.as_str())
+                         .unwrap_or("")
+                         .to_string();
+                     self.session.app_status = AppStatus::Running { pid, uri };
+                     // Auto-fetch tree when app starts
+                     if self.session.tree.is_none() {
+                         self.needs_tree_fetch = true;
+                     }
+                 }
+                 "stopped" | "not_running" => self.session.app_status = AppStatus::Stopped,
+                 "error" => {
+                     let error = payload
+                         .get("error")
+                         .and_then(|e| e.as_str())
+                         .unwrap_or("Unknown error")
+                         .to_string();
+                     self.session.app_status = AppStatus::Error(error);
+                 }
+                 _ => {}
+             }
+            
+            // Also update the Session in the sessions list (for session picker display)
+            if let Some(session_id) = event_session_id {
+                if let Some(session) = self.sessions.iter_mut().find(|s| s.id == session_id) {
+                    session.app_status = status.to_string();
                 }
-                "stopped" | "not_running" => self.session.app_status = AppStatus::Stopped,
-                "error" => {
-                    let error = payload
-                        .get("error")
-                        .and_then(|e| e.as_str())
-                        .unwrap_or("Unknown error")
-                        .to_string();
-                    self.session.app_status = AppStatus::Error(error);
-                }
-                _ => {}
             }
-        }
-    }
+         }
+       }
 
     pub fn filtered_interaction_logs(&self) -> impl Iterator<Item = &LogEntry> {
         let filter = self.filter.clone();
@@ -701,39 +655,39 @@ impl App {
     }
 
     pub fn handle_agent_response(&mut self, resp: AgentResponse) {
-        self.pending_response = false;
+        self.session.pending_response = false;
 
         let event = resp.to_monitoring_event();
         self.push_event(event);
 
         match resp.status {
             AgentStatus::Success => {
-                self.conversation_id = None;
-                self.agent_question = None;
-                self.last_agent_error = None;
+                self.session.conversation_id = None;
+                self.session.agent_question = None;
+                self.session.last_agent_error = None;
             }
             AgentStatus::NeedsContext => {
-                self.conversation_id = resp.conversation_id;
-                self.agent_question = resp.question;
-                self.last_agent_error = None;
+                self.session.conversation_id = resp.conversation_id;
+                self.session.agent_question = resp.question;
+                self.session.last_agent_error = None;
             }
             AgentStatus::Error => {
-                self.conversation_id = None;
-                self.agent_question = None;
+                self.session.conversation_id = None;
+                self.session.agent_question = None;
                 if let Some(ref err) = resp.summary {
                     self.push_toast(Toast::error(err));
                 }
-                self.last_agent_error = resp.summary;
+                self.session.last_agent_error = resp.summary;
             }
         }
     }
 
     pub fn in_answer_mode(&self) -> bool {
-        self.conversation_id.is_some()
+        self.session.conversation_id.is_some()
     }
 
     pub fn is_app_running(&self) -> bool {
-        matches!(self.app_status, AppStatus::Running { .. } | AppStatus::Starting)
+        matches!(self.session.app_status, AppStatus::Running { .. } | AppStatus::Starting)
     }
 
     pub fn has_session(&self) -> bool {
@@ -741,8 +695,8 @@ impl App {
     }
 
     pub fn cancel_answer_mode(&mut self) {
-        self.conversation_id = None;
-        self.agent_question = None;
+        self.session.conversation_id = None;
+        self.session.agent_question = None;
     }
 
     pub fn scroll_up(&mut self) {
@@ -762,33 +716,33 @@ impl App {
     }
 
     pub fn tree_up(&mut self) {
-        self.tree_state.key_up();
+        self.session.tree_state.key_up();
     }
 
     pub fn tree_down(&mut self) {
-        self.tree_state.key_down();
+        self.session.tree_state.key_down();
     }
 
     pub fn tree_toggle(&mut self) {
-        self.tree_state.toggle_selected();
+        self.session.tree_state.toggle_selected();
     }
 
     pub fn tree_left(&mut self) {
-        self.tree_state.key_left();
+        self.session.tree_state.key_left();
     }
 
     pub fn tree_right(&mut self) {
-        self.tree_state.key_right();
+        self.session.tree_state.key_right();
     }
 
     pub fn tree_selected(&self) -> Option<&String> {
-        self.tree_state.selected().last()
+        self.session.tree_state.selected().last()
     }
 
     pub fn clear_events(&mut self) {
-        self.flutter_logs.clear();
-        self.agent_events.clear();
-        self.interaction_logs.clear();
+        self.session.flutter_logs.clear();
+        self.session.agent_events.clear();
+        self.session.interaction_logs.clear();
         self.scroll_offset = 0;
     }
 
@@ -812,25 +766,38 @@ impl App {
         }
     }
 
-    pub fn session_picker_select(&mut self) {
-        if let Some(session) = self.sessions.get(self.session_picker_index).cloned() {
-            self.selected_session = Some(session.id.clone());
-            self.update_status_from_session(&session);
+    /// Select a session from the picker. Returns true if a different session was selected.
+    pub fn session_picker_select(&mut self) -> bool {
+        let Some(session) = self.sessions.get(self.session_picker_index).cloned() else {
+            self.mode = Mode::Normal;
+            return false;
+        };
+
+        // Check if selecting the same session - no-op
+        if self.selected_session.as_deref() == Some(&session.id) {
+            self.mode = Mode::Normal;
+            return false;
         }
+
+        // Switching to a different session - reset all session state
+        self.reset_session_state();
+        self.selected_session = Some(session.id.clone());
+        self.update_status_from_session(&session);
         self.mode = Mode::Normal;
+        true
     }
 
     pub fn update_status_from_session(&mut self, session: &crate::ws::protocol::Session) {
         match session.app_status.as_str() {
-            "starting" => self.app_status = AppStatus::Starting,
+            "starting" => self.session.app_status = AppStatus::Starting,
             "running" => {
                 let pid = session.pid.unwrap_or(0);
                 let uri = session.vm_service_uri.clone().unwrap_or_default();
-                self.app_status = AppStatus::Running { pid, uri };
+                self.session.app_status = AppStatus::Running { pid, uri };
             }
-            "stopped" | "not_running" => self.app_status = AppStatus::Stopped,
-            "error" => self.app_status = AppStatus::Error("Unknown error".to_string()),
-            _ => self.app_status = AppStatus::Unknown,
+            "stopped" | "not_running" => self.session.app_status = AppStatus::Stopped,
+            "error" => self.session.app_status = AppStatus::Error("Unknown error".to_string()),
+            _ => self.session.app_status = AppStatus::Unknown,
         }
     }
 
@@ -929,9 +896,9 @@ mod tests {
             });
         }
 
-        assert_eq!(app.interaction_logs.len(), 3);
-        assert!(app.interaction_logs[0].message.contains("msg1"));
-        assert!(app.interaction_logs[2].message.contains("msg3"));
+        assert_eq!(app.session.interaction_logs.len(), 3);
+        assert!(app.session.interaction_logs[0].message.contains("msg1"));
+        assert!(app.session.interaction_logs[2].message.contains("msg3"));
     }
 
     #[test]
@@ -954,8 +921,8 @@ mod tests {
         app.scroll_offset = 5;
 
         app.clear_events();
-        assert!(app.flutter_logs.is_empty());
-        assert!(app.agent_events.is_empty());
+        assert!(app.session.flutter_logs.is_empty());
+        assert!(app.session.agent_events.is_empty());
         assert_eq!(app.scroll_offset, 0);
     }
 
@@ -970,7 +937,7 @@ mod tests {
         };
 
         app.handle_command_response(resp);
-        match app.app_status {
+        match app.session.app_status {
             AppStatus::Running { pid, uri } => {
                 assert_eq!(pid, 1234);
                 assert_eq!(uri, "ws://127.0.0.1:5678");
@@ -982,7 +949,7 @@ mod tests {
     #[test]
     fn test_handle_agent_response_needs_context() {
         let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
-        app.pending_response = true;
+        app.session.pending_response = true;
 
         let resp = AgentResponse {
             id: "1".to_string(),
@@ -993,15 +960,15 @@ mod tests {
         };
 
         app.handle_agent_response(resp);
-        assert!(!app.pending_response);
-        assert_eq!(app.conversation_id, Some("conv-123".to_string()));
+        assert!(!app.session.pending_response);
+        assert_eq!(app.session.conversation_id, Some("conv-123".to_string()));
     }
 
     #[test]
     fn test_handle_agent_response_success_clears_conversation() {
         let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
-        app.conversation_id = Some("conv-123".to_string());
-        app.pending_response = true;
+        app.session.conversation_id = Some("conv-123".to_string());
+        app.session.pending_response = true;
 
         let resp = AgentResponse {
             id: "1".to_string(),
@@ -1012,14 +979,14 @@ mod tests {
         };
 
         app.handle_agent_response(resp);
-        assert!(!app.pending_response);
-        assert!(app.conversation_id.is_none());
+        assert!(!app.session.pending_response);
+        assert!(app.session.conversation_id.is_none());
     }
 
     #[test]
     fn test_handle_agent_response_creates_agent_event() {
         let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
-        app.pending_response = true;
+        app.session.pending_response = true;
 
         let resp = AgentResponse {
             id: "1".to_string(),
@@ -1030,8 +997,8 @@ mod tests {
         };
 
         app.handle_agent_response(resp);
-        assert_eq!(app.agent_events.len(), 1);
-        let event = app.agent_events.back().unwrap();
+        assert_eq!(app.session.agent_events.len(), 1);
+        let event = app.session.agent_events.back().unwrap();
         assert_eq!(event.source, "agent");
         assert_eq!(event.event_type, "agent_success");
     }
@@ -1039,7 +1006,7 @@ mod tests {
     #[test]
     fn test_handle_agent_response_error_sets_last_error() {
         let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
-        app.pending_response = true;
+        app.session.pending_response = true;
 
         let resp = AgentResponse {
             id: "1".to_string(),
@@ -1050,8 +1017,8 @@ mod tests {
         };
 
         app.handle_agent_response(resp);
-        assert_eq!(app.last_agent_error, Some("Something went wrong".to_string()));
-        assert!(app.conversation_id.is_none());
+        assert_eq!(app.session.last_agent_error, Some("Something went wrong".to_string()));
+        assert!(app.session.conversation_id.is_none());
     }
 
     #[test]
@@ -1297,5 +1264,128 @@ mod tests {
         assert_eq!(app.sessions.len(), 1);
         assert_eq!(app.sessions[0].id, "sess-new");
         assert_eq!(app.sessions[0].name, "new-app");
+    }
+
+    #[test]
+    fn test_session_switch_clears_logs() {
+        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
+        app.set_sessions(vec![
+            Session {
+                id: "sess-1".to_string(),
+                name: "app1".to_string(),
+                project_path: "/path/1".to_string(),
+                app_status: "running".to_string(),
+                vm_service_uri: None,
+                pid: None,
+                connected_clients: Vec::new(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                last_active_at: "2024-01-01T00:00:00Z".to_string(),
+            },
+            Session {
+                id: "sess-2".to_string(),
+                name: "app2".to_string(),
+                project_path: "/path/2".to_string(),
+                app_status: "not_running".to_string(),
+                vm_service_uri: None,
+                pid: None,
+                connected_clients: Vec::new(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                last_active_at: "2024-01-01T00:00:00Z".to_string(),
+            },
+        ]);
+
+        // Add some logs to session 1
+        app.push_flutter_log(crate::flutter_log::FlutterLogEntry::parse("Log line 1"));
+        app.push_flutter_log(crate::flutter_log::FlutterLogEntry::parse("Log line 2"));
+        app.push_interaction_log(LogEntry {
+            ts: "2024-01-01T00:00:00Z".to_string(),
+            level: LogLevel::Info,
+            message: "Interaction 1".to_string(),
+        });
+        app.scroll_offset = 5;
+
+        assert_eq!(app.session.flutter_logs.len(), 2);
+        assert_eq!(app.session.interaction_logs.len(), 1);
+
+        // Switch to session 2
+        app.session_picker_index = 1;
+        let switched = app.session_picker_select();
+
+        assert!(switched);
+        assert_eq!(app.selected_session, Some("sess-2".to_string()));
+
+        // Logs should be cleared
+        assert!(app.session.flutter_logs.is_empty());
+        assert!(app.session.interaction_logs.is_empty());
+        assert!(app.session.agent_events.is_empty());
+        assert_eq!(app.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_selecting_same_session_does_nothing() {
+        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
+        app.set_sessions(vec![Session {
+            id: "sess-1".to_string(),
+            name: "app1".to_string(),
+            project_path: "/path/1".to_string(),
+            app_status: "running".to_string(),
+            vm_service_uri: None,
+            pid: None,
+            connected_clients: Vec::new(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            last_active_at: "2024-01-01T00:00:00Z".to_string(),
+        }]);
+
+        // Add some logs
+        app.push_flutter_log(crate::flutter_log::FlutterLogEntry::parse("Log line 1"));
+        app.push_flutter_log(crate::flutter_log::FlutterLogEntry::parse("Log line 2"));
+
+        assert_eq!(app.session.flutter_logs.len(), 2);
+        assert_eq!(app.selected_session, Some("sess-1".to_string()));
+
+        // Try to select the same session
+        app.session_picker_index = 0;
+        let switched = app.session_picker_select();
+
+        // Should return false and NOT clear logs
+        assert!(!switched);
+        assert_eq!(app.session.flutter_logs.len(), 2);
+        assert_eq!(app.selected_session, Some("sess-1".to_string()));
+    }
+
+    #[test]
+    fn test_reset_session_state_clears_all() {
+        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
+
+        // Set up various session state
+        app.session.app_status = AppStatus::Running {
+            pid: 1234,
+            uri: "ws://test".to_string(),
+        };
+        app.push_flutter_log(crate::flutter_log::FlutterLogEntry::parse("Log"));
+        app.push_agent_event(MonitoringEvent {
+            ts: "2024-01-01T00:00:00Z".to_string(),
+            source: "agent".to_string(),
+            event_type: "test".to_string(),
+            payload: serde_json::Value::Null,
+        });
+        app.session.conversation_id = Some("conv-123".to_string());
+        app.session.pending_response = true;
+        app.filter = Some("filter".to_string());
+        app.scroll_offset = 10;
+
+        // Reset
+        app.reset_session_state();
+
+        // Verify everything is cleared
+        assert!(matches!(app.session.app_status, AppStatus::Unknown));
+        assert!(app.session.flutter_logs.is_empty());
+        assert!(app.session.agent_events.is_empty());
+        assert!(app.session.interaction_logs.is_empty());
+        assert!(app.session.tree.is_none());
+        assert!(app.session.conversation_id.is_none());
+        assert!(!app.session.pending_response);
+        assert!(app.filter.is_none());
+        assert_eq!(app.scroll_offset, 0);
     }
 }

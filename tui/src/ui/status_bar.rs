@@ -1,4 +1,4 @@
-use crate::app::{App, AppStatus, TreeNode, WsState};
+use crate::app::{App, AppStatus, WsState};
 use crate::theme::theme;
 use ratatui::{
     layout::{Constraint, Layout, Rect},
@@ -39,7 +39,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     // Show VM service URI when running, otherwise show daemon URI
-    match &app.app_status {
+    match &app.session.app_status {
         AppStatus::Running { pid, uri } if !uri.is_empty() => {
             left_spans.push(sep.clone());
             left_spans.push(Span::styled(
@@ -71,28 +71,19 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         AppStatus::Error(e) => {
             left_spans.push(sep.clone());
             left_spans.push(Span::styled(
-                format!("error: {}", truncate(e, 30)),
+                format!("error: {}", truncate(&e, 30)),
                 Style::default().fg(t.error),
             ));
         }
         AppStatus::Unknown => {}
     }
 
-    // Widget count if tree exists
-    if let Some(tree) = &app.tree {
-        let count = count_nodes(&tree.nodes);
-        left_spans.push(sep.clone());
-        left_spans.push(Span::styled(
-            format!("{} widgets", count),
-            Style::default().fg(t.source_tree),
-        ));
-    }
 
     // === RIGHT SIDE ===
     let mut right_spans: Vec<Span> = vec![];
 
     // Throbber when pending response or connecting
-    if app.pending_response || app.ws_state == WsState::Connecting {
+    if app.session.pending_response || app.ws_state == WsState::Connecting {
         let throbber_spans = render_throbber(&app.throbber_state);
         right_spans.extend(throbber_spans);
         right_spans.push(Span::raw(" "));
@@ -146,10 +137,4 @@ fn truncate(s: &str, max: usize) -> String {
     } else {
         format!("{}…", &s[..max - 1])
     }
-}
-
-fn count_nodes(nodes: &[TreeNode]) -> usize {
-    nodes
-        .iter()
-        .fold(0, |acc, node| acc + 1 + count_nodes(&node.children))
 }

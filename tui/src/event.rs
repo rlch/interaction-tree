@@ -305,7 +305,7 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>)
 }
 
 async fn maybe_fetch_tree(app: &mut App, ws: &Option<WsClient>) {
-    if app.content_tab == ContentTab::Tree && app.tree.is_none() && app.is_app_running() {
+    if app.content_tab == ContentTab::Tree && app.session.tree.is_none() && app.is_app_running() {
         if let Some(client) = ws {
             let msg = OutgoingMessage::Command {
                 id: Uuid::new_v4().to_string(),
@@ -437,19 +437,25 @@ async fn handle_session_picker_mode(
             app.session_picker_up();
         }
         KeyCode::Enter => {
-            if let Some(session) = app.sessions.get(app.session_picker_index) {
-                if let Some(client) = ws {
+            // Get session ID before calling select (which will modify state)
+            let session_id = app
+                .sessions
+                .get(app.session_picker_index)
+                .map(|s| s.id.clone());
+
+            // Only send connect command if we're actually switching sessions
+            if app.session_picker_select() {
+                if let (Some(session_id), Some(client)) = (session_id, ws) {
                     let msg = OutgoingMessage::Command {
                         id: Uuid::new_v4().to_string(),
                         client_id: client.client_id().to_string(),
                         action: "connect_session".to_string(),
                         key: None,
-                        data: Some(serde_json::json!({ "sessionId": session.id })),
+                        data: Some(serde_json::json!({ "sessionId": session_id })),
                     };
                     let _ = client.send(msg).await;
                 }
             }
-            app.session_picker_select();
         }
         KeyCode::Esc | KeyCode::Char('q') => {
             app.mode = Mode::Normal;
@@ -711,9 +717,9 @@ async fn execute_command(app: &mut App, input: &str, ws: &Option<WsClient>) -> R
                     client_id: client.client_id().to_string(),
                     intent,
                     answer,
-                    conversation_id: app.conversation_id.clone(),
+                    conversation_id: app.session.conversation_id.clone(),
                 };
-                app.pending_response = true;
+                app.session.pending_response = true;
                 let _ = client.send(msg).await;
             }
         }
