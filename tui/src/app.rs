@@ -537,7 +537,7 @@ impl App {
        if let Some(status) = status {
            tracing::info!(status = status, "Updating app_status");
            match status {
-               "starting" => self.app_status = AppStatus::Starting,
+               "starting" => self.session.app_status = AppStatus::Starting,
                "running" => {
                     let pid = payload.get("pid").and_then(|p| p.as_u64()).unwrap_or(0) as u32;
                     let uri = payload
@@ -545,20 +545,20 @@ impl App {
                         .and_then(|u| u.as_str())
                         .unwrap_or("")
                         .to_string();
-                    self.app_status = AppStatus::Running { pid, uri };
+                    self.session.app_status = AppStatus::Running { pid, uri };
                     // Auto-fetch tree when app starts
-                    if self.tree.is_none() {
+                    if self.session.tree.is_none() {
                         self.needs_tree_fetch = true;
                     }
                 }
-                "stopped" | "not_running" => self.app_status = AppStatus::Stopped,
+                "stopped" | "not_running" => self.session.app_status = AppStatus::Stopped,
                 "error" => {
                     let error = payload
                         .get("error")
                         .and_then(|e| e.as_str())
                         .unwrap_or("Unknown error")
                         .to_string();
-                    self.app_status = AppStatus::Error(error);
+                    self.session.app_status = AppStatus::Error(error);
                 }
                 _ => {}
             }
@@ -567,7 +567,7 @@ impl App {
 
     pub fn filtered_interaction_logs(&self) -> impl Iterator<Item = &LogEntry> {
         let filter = self.filter.clone();
-        self.interaction_logs.iter().filter(move |e| {
+        self.session.interaction_logs.iter().filter(move |e| {
             let Some(ref pattern) = filter else {
                 return true;
             };
@@ -578,7 +578,7 @@ impl App {
 
     pub fn filtered_flutter_logs(&self) -> impl Iterator<Item = &FlutterLogEntry> {
         let filter = self.filter.clone();
-        self.flutter_logs.iter().filter(move |e| {
+        self.session.flutter_logs.iter().filter(move |e| {
             if e.is_noise() {
                 return false;
             }
@@ -592,7 +592,7 @@ impl App {
 
     pub fn filtered_agent_events(&self) -> impl Iterator<Item = &MonitoringEvent> {
         let filter = self.filter.clone();
-        self.agent_events.iter().filter(move |e| {
+        self.session.agent_events.iter().filter(move |e| {
             let Some(ref pattern) = filter else {
                 return true;
             };
@@ -653,7 +653,7 @@ impl App {
             // Check for app status from response
             if let Some(status) = resp.data.get("status").and_then(|s| s.as_str()) {
                 match status {
-                    "starting" => self.app_status = AppStatus::Starting,
+                    "starting" => self.session.app_status = AppStatus::Starting,
                     "running" => {
                         let pid = resp.data.get("pid").and_then(|p| p.as_u64()).unwrap_or(0) as u32;
                         let uri = resp
@@ -662,18 +662,18 @@ impl App {
                             .and_then(|u| u.as_str())
                             .unwrap_or("")
                             .to_string();
-                        self.app_status = AppStatus::Running { pid, uri };
+                        self.session.app_status = AppStatus::Running { pid, uri };
                         // Auto-fetch tree when app starts
-                        if self.tree.is_none() {
+                        if self.session.tree.is_none() {
                             self.needs_tree_fetch = true;
                         }
                     }
-                    "stopped" | "not_running" => self.app_status = AppStatus::Stopped,
+                    "stopped" | "not_running" => self.session.app_status = AppStatus::Stopped,
                     _ => {}
                 }
             } else if resp.data.get("pid").is_some() {
                 // run_app response returns just { pid } - treat as starting
-                self.app_status = AppStatus::Starting;
+                self.session.app_status = AppStatus::Starting;
             }
         } else if let Some(err) = resp.error {
             self.push_toast(Toast::error(&err));
