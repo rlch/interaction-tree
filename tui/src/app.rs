@@ -14,6 +14,55 @@ pub struct InteractionTree {
     pub last_updated: Option<String>,
 }
 
+/// Session-specific state that should be reset when switching sessions.
+/// This encapsulates all data that belongs to a particular session.
+#[derive(Debug, Default)]
+pub struct SessionState {
+    pub flutter_logs: VecDeque<FlutterLogEntry>,
+    pub agent_events: VecDeque<MonitoringEvent>,
+    pub interaction_logs: VecDeque<LogEntry>,
+    pub tree: Option<InteractionTree>,
+    pub tree_state: TreeState<String>,
+    pub app_status: AppStatus,
+    pub conversation_id: Option<String>,
+    pub agent_question: Option<String>,
+    pub pending_response: bool,
+    pub pending_intent: Option<String>,
+    pub last_agent_error: Option<String>,
+}
+
+impl SessionState {
+    pub fn new(max_events: usize) -> Self {
+        Self {
+            flutter_logs: VecDeque::with_capacity(max_events),
+            agent_events: VecDeque::with_capacity(max_events),
+            interaction_logs: VecDeque::with_capacity(max_events),
+            tree: None,
+            tree_state: TreeState::default(),
+            app_status: AppStatus::Unknown,
+            conversation_id: None,
+            agent_question: None,
+            pending_response: false,
+            pending_intent: None,
+            last_agent_error: None,
+        }
+    }
+
+    pub fn reset(&mut self, max_events: usize) {
+        self.flutter_logs = VecDeque::with_capacity(max_events);
+        self.agent_events = VecDeque::with_capacity(max_events);
+        self.interaction_logs = VecDeque::with_capacity(max_events);
+        self.tree = None;
+        self.tree_state = TreeState::default();
+        self.app_status = AppStatus::Unknown;
+        self.conversation_id = None;
+        self.agent_question = None;
+        self.pending_response = false;
+        self.pending_intent = None;
+        self.last_agent_error = None;
+    }
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TreeNode {
@@ -119,14 +168,8 @@ pub struct App {
     pub selected_session: Option<String>,
     pub session_picker_index: usize,
 
-    pub app_status: AppStatus,
-
-    /// Flutter logs (from flutter run process)
-    pub flutter_logs: VecDeque<FlutterLogEntry>,
-    /// Agent events (tool calls, responses)
-    pub agent_events: VecDeque<MonitoringEvent>,
-    /// Interaction execution history (taps, scrolls, etc.)
-    pub interaction_logs: VecDeque<LogEntry>,
+    /// Session-specific state (logs, tree, agent state, etc.)
+    pub session: SessionState,
     pub max_events: usize,
 
     pub mode: Mode,
@@ -135,28 +178,73 @@ pub struct App {
     pub content_tab: ContentTab,
     pub scroll_offset: usize,
 
-    pub conversation_id: Option<String>,
-    pub agent_question: Option<String>,
-    pub pending_response: bool,
-    pub pending_intent: Option<String>,
-    pub last_agent_error: Option<String>,
-
-    pub tree: Option<InteractionTree>,
-    pub tree_state: TreeState<String>,
     pub needs_tree_fetch: bool,
     pub pending_session_connect: Option<String>,
 
     pub throbber_state: throbber_widgets_tui::ThrobberState,
 
-    // Completions - currently unused, hotkey-driven UI instead
-    // pub completions: Vec<&'static str>,
-    // pub completion_index: usize,
-    // pub completion_start_col: usize,
-
     pub toasts: VecDeque<Toast>,
     pub toast_ttl_secs: u64,
 
     pub should_quit: bool,
+}
+
+// Convenience accessors to maintain API compatibility
+impl App {
+    #[inline]
+    pub fn app_status(&self) -> &AppStatus {
+        &self.session.app_status
+    }
+
+    #[inline]
+    pub fn flutter_logs(&self) -> &VecDeque<FlutterLogEntry> {
+        &self.session.flutter_logs
+    }
+
+    #[inline]
+    pub fn agent_events(&self) -> &VecDeque<MonitoringEvent> {
+        &self.session.agent_events
+    }
+
+    #[inline]
+    pub fn interaction_logs(&self) -> &VecDeque<LogEntry> {
+        &self.session.interaction_logs
+    }
+
+    #[inline]
+    pub fn tree(&self) -> Option<&InteractionTree> {
+        self.session.tree.as_ref()
+    }
+
+    #[inline]
+    pub fn tree_state(&self) -> &TreeState<String> {
+        &self.session.tree_state
+    }
+
+    #[inline]
+    pub fn tree_state_mut(&mut self) -> &mut TreeState<String> {
+        &mut self.session.tree_state
+    }
+
+    #[inline]
+    pub fn conversation_id(&self) -> Option<&String> {
+        self.session.conversation_id.as_ref()
+    }
+
+    #[inline]
+    pub fn agent_question(&self) -> Option<&String> {
+        self.session.agent_question.as_ref()
+    }
+
+    #[inline]
+    pub fn pending_response(&self) -> bool {
+        self.session.pending_response
+    }
+
+    #[inline]
+    pub fn last_agent_error(&self) -> Option<&String> {
+        self.session.last_agent_error.as_ref()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -230,11 +318,7 @@ impl App {
             selected_session: None,
             session_picker_index: 0,
 
-            app_status: AppStatus::Unknown,
-
-            flutter_logs: VecDeque::with_capacity(max_events),
-            agent_events: VecDeque::with_capacity(max_events),
-            interaction_logs: VecDeque::with_capacity(max_events),
+            session: SessionState::new(max_events),
             max_events,
 
             mode: Mode::SessionPicker,
@@ -243,14 +327,6 @@ impl App {
             content_tab: ContentTab::default(),
             scroll_offset: 0,
 
-            conversation_id: None,
-            agent_question: None,
-            pending_response: false,
-            pending_intent: None,
-            last_agent_error: None,
-
-            tree: None,
-            tree_state: TreeState::default(),
             needs_tree_fetch: false,
             pending_session_connect: None,
 
@@ -261,6 +337,14 @@ impl App {
 
             should_quit: false,
         }
+    }
+
+    /// Reset all session-specific state. Called when switching sessions.
+    pub fn reset_session_state(&mut self) {
+        self.session.reset(self.max_events);
+        self.scroll_offset = 0;
+        self.filter = None;
+        self.needs_tree_fetch = false;
     }
 
     pub fn push_toast(&mut self, toast: Toast) {
@@ -328,36 +412,36 @@ impl App {
     */
 
     pub fn set_tree(&mut self, tree: InteractionTree) {
-        self.tree = Some(tree);
-        self.tree_state = TreeState::default();
+        self.session.tree = Some(tree);
+        self.session.tree_state = TreeState::default();
     }
 
     pub fn compact_tree(&self) -> Option<CompactTree> {
-        self.tree.as_ref().map(|t| {
+        self.session.tree.as_ref().map(|t| {
             let (compact, _warnings) = CompactTree::from_tree_nodes(&t.nodes);
             compact
         })
     }
 
     pub fn push_interaction_log(&mut self, entry: LogEntry) {
-        if self.interaction_logs.len() >= self.max_events {
-            self.interaction_logs.pop_front();
+        if self.session.interaction_logs.len() >= self.max_events {
+            self.session.interaction_logs.pop_front();
         }
-        self.interaction_logs.push_back(entry);
+        self.session.interaction_logs.push_back(entry);
     }
 
     pub fn push_flutter_log(&mut self, entry: FlutterLogEntry) {
-        if self.flutter_logs.len() >= self.max_events {
-            self.flutter_logs.pop_front();
+        if self.session.flutter_logs.len() >= self.max_events {
+            self.session.flutter_logs.pop_front();
         }
-        self.flutter_logs.push_back(entry);
+        self.session.flutter_logs.push_back(entry);
     }
 
     pub fn push_agent_event(&mut self, event: MonitoringEvent) {
-        if self.agent_events.len() >= self.max_events {
-            self.agent_events.pop_front();
+        if self.session.agent_events.len() >= self.max_events {
+            self.session.agent_events.pop_front();
         }
-        self.agent_events.push_back(event);
+        self.session.agent_events.push_back(event);
     }
 
     pub fn push_event(&mut self, event: MonitoringEvent) {
@@ -381,7 +465,7 @@ impl App {
                 // Clear selected session if it was destroyed
                 if self.selected_session.as_deref() == Some(session_id) {
                     self.selected_session = None;
-                    self.app_status = AppStatus::Stopped;
+                    self.session.app_status = AppStatus::Stopped;
                 }
             }
             return;
@@ -402,8 +486,8 @@ impl App {
 
         // Handle tree updates
         if event_type == "tree.updated" {
-            if let Some(targets) = event.payload.get("targets").and_then(|t| t.as_array()) {
-                let nodes = Self::parse_tree_nodes(targets);
+            if let Some(tree_data) = event.payload.get("tree").and_then(|t| t.as_array()) {
+                let nodes = Self::parse_tree_nodes(tree_data);
                 let tree = InteractionTree {
                     nodes,
                     last_updated: Some(chrono::Utc::now().to_rfc3339()),
@@ -432,17 +516,29 @@ impl App {
     }
 
     fn handle_session_status_event(&mut self, payload: &serde_json::Value) {
-        // Check if this event is for our selected session
-        if let Some(session_id) = payload.get("sessionId").and_then(|s| s.as_str()) {
-            if self.selected_session.as_deref() != Some(session_id) {
-                return;
-            }
-        }
+       let event_session_id = payload.get("sessionId").and_then(|s| s.as_str());
+       let status = payload.get("status").and_then(|s| s.as_str());
+       
+       tracing::debug!(
+           event_session_id = ?event_session_id,
+           selected_session = ?self.selected_session,
+           status = ?status,
+           "handle_session_status_event"
+       );
 
-        if let Some(status) = payload.get("status").and_then(|s| s.as_str()) {
-            match status {
-                "starting" => self.app_status = AppStatus::Starting,
-                "running" => {
+       // Check if this event is for our selected session
+       if let Some(session_id) = event_session_id {
+           if self.selected_session.as_deref() != Some(session_id) {
+               tracing::debug!("Ignoring status event for different session");
+               return;
+           }
+       }
+
+       if let Some(status) = status {
+           tracing::info!(status = status, "Updating app_status");
+           match status {
+               "starting" => self.app_status = AppStatus::Starting,
+               "running" => {
                     let pid = payload.get("pid").and_then(|p| p.as_u64()).unwrap_or(0) as u32;
                     let uri = payload
                         .get("vmServiceUri")
