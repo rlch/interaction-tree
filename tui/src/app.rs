@@ -290,8 +290,17 @@ impl App {
 
     /// Get the currently selected session (single source of truth for session state)
     pub fn current_session(&self) -> Option<&Session> {
-        self.selected_session.as_ref()
-            .and_then(|id| self.sessions.iter().find(|s| s.id == *id))
+        let result = self.selected_session.as_ref()
+            .and_then(|id| self.sessions.iter().find(|s| s.id == *id));
+        if let Some(session) = &result {
+            tracing::debug!(
+                session_id = %session.id,
+                app_status = %session.app_status,
+                sessions_count = self.sessions.len(),
+                "current_session lookup"
+            );
+        }
+        result
     }
 
     /// Get the currently selected session mutably
@@ -468,16 +477,26 @@ impl App {
            status = ?status,
            pid = ?pid,
            uri = ?uri,
-           "handle_session_status_event"
+           sessions_count = self.sessions.len(),
+           "handle_session_status_event received"
        );
 
        // Update the Session in the sessions list (always, not just selected session)
        // This ensures we have accurate state when user switches sessions
        if let Some(session_id) = event_session_id {
-           if let Some(session) = self.sessions.iter_mut().find(|s| s.id == session_id) {
+           let session_ids: Vec<String> = self.sessions.iter().map(|s| s.id.clone()).collect();
+           tracing::debug!(session_id = session_id, available_sessions = ?session_ids, "Looking for session");
+           
+           let found = if let Some(session) = self.sessions.iter_mut().find(|s| s.id == session_id) {
+               let old_status = session.app_status.clone();
                if let Some(status) = status {
-                   tracing::info!(session_id = session_id, status = status, "Updating session.app_status");
                    session.app_status = status.to_string();
+                   tracing::info!(
+                       session_id = session_id, 
+                       old_status = %old_status,
+                       new_status = status, 
+                       "Updated session.app_status"
+                   );
                }
                if let Some(pid) = pid {
                    session.pid = Some(pid as u32);
@@ -493,6 +512,17 @@ impl App {
                {
                    self.needs_tree_fetch = true;
                }
+               true
+           } else {
+               false
+           };
+           
+           if !found {
+               tracing::warn!(
+                   session_id = session_id,
+                   available_sessions = ?session_ids,
+                   "Session NOT FOUND in sessions list!"
+               );
            }
        }
     }
@@ -559,20 +589,35 @@ impl App {
                 return;
             }
 
-            // Check if this is a session creation response
+            // Check if this is a session response (from create_session or connect_session)
             if let Some(session) = resp.data.get("session") {
                 match serde_json::from_value::<Session>(session.clone()) {
                     Ok(parsed) => {
                         let session_id = parsed.id.clone();
-                        // Add to sessions list if not already there
-                        if !self.sessions.iter().any(|s| s.id == session_id) {
+                        // Update existing session or add new one
+                        if let Some(existing) = self.sessions.iter_mut().find(|s| s.id == session_id) {
+                            // Update the existing session with latest data from server
+                            tracing::info!(
+                                session_id = %session_id,
+                                old_status = %existing.app_status,
+                                new_status = %parsed.app_status,
+                                "Updating existing session from response"
+                            );
+                            existing.app_status = parsed.app_status;
+                            existing.pid = parsed.pid;
+                            existing.vm_service_uri = parsed.vm_service_uri;
+                        } else {
+                            // New session, add to list
+                            tracing::info!(session_id = %session_id, "Adding new session to list");
                             self.sessions.push(parsed);
+                            self.push_toast(Toast::success("Session created"));
                         }
-                        // Auto-select the new session
+                        // Auto-select the session
                         self.selected_session = Some(session_id);
-                        self.session_picker_index = self.sessions.len().saturating_sub(1);
+                        if let Some(idx) = self.sessions.iter().position(|s| s.id == self.selected_session.as_deref().unwrap_or_default()) {
+                            self.session_picker_index = idx;
+                        }
                         self.mode = Mode::Normal;
-                        self.push_toast(Toast::success("Session created"));
                     }
                     Err(e) => {
                         tracing::error!(?e, ?session, "Failed to parse session response");
