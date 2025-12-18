@@ -23,8 +23,7 @@ export class Daemon {
     setupFlutterEvents() {
         this.flutterManager.on('started', async (sessionId, vmServiceUri) => {
             log.daemon.info({ sessionId, vmServiceUri }, 'Flutter app started');
-            const flutterProcess = this.flutterManager.getProcess(sessionId);
-            this.sessionManager.updateStatus(sessionId, 'running', { vmServiceUri, pid: flutterProcess?.pid });
+            // Note: status is updated to 'running' in ws/server.ts after runApp() resolves
             // Connect VM client
             const vmClient = new VMServiceClient();
             try {

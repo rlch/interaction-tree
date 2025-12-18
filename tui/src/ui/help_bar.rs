@@ -1,4 +1,4 @@
-use crate::app::{App, InputPromptKind, Mode, Pane};
+use crate::app::{App, ContentTab, InputPromptKind, Mode};
 use crate::theme::theme;
 use ratatui::{
     layout::Rect,
@@ -13,42 +13,32 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 
     let bindings = match &app.mode {
         Mode::Normal => {
-            match app.selected_pane {
-                Pane::Tree => vec![
-                    ("↑↓/jk", "navigate"),
-                    ("←→/hl", "collapse/expand"),
-                    ("Enter", "toggle"),
-                    ("Tab", "content pane"),
-                    ("?", "help"),
-                    ("q", "quit"),
-                ],
-                Pane::Content => {
-                    let mut bindings = vec![
-                        ("←→/hl", "tabs"),
-                        ("↑↓/jk", "scroll"),
-                        ("/", "filter"),
-                        ("s", "sessions"),
-                    ];
+            let mut bindings = vec![
+                ("hl", "tabs"),
+                ("↑↓/jk", "scroll"),
+                ("/", "filter"),
+                ("s", "sessions"),
+            ];
 
-                    if app.has_session() {
-                        if app.is_app_running() {
-                            bindings.push(("r", "reload"));
-                            bindings.push(("R", "restart"));
-                            bindings.push(("x", "stop"));
-                            bindings.push(("t", "tree"));
-                        } else {
-                            bindings.push(("p", "run"));
-                        }
-                    }
+            if app.content_tab == ContentTab::Tree {
+                bindings[1] = ("↑↓/jk", "navigate");
+                bindings.push(("←→", "expand/collapse"));
+                bindings.push(("Enter", "toggle"));
+            }
 
-                    if app.tree.is_some() {
-                        bindings.push(("Tab", "tree pane"));
-                    }
-                    bindings.push(("c", "clear"));
-                    bindings.push(("?", "help"));
-                    bindings
+            if app.has_session() {
+                if app.is_app_running() {
+                    bindings.push(("r", "reload"));
+                    bindings.push(("R", "restart"));
+                    bindings.push(("x", "stop"));
+                } else {
+                    bindings.push(("p", "run"));
                 }
             }
+
+            bindings.push(("c", "clear"));
+            bindings.push(("?", "help"));
+            bindings
         }
         Mode::Filter => vec![("Enter", "apply"), ("Esc", "cancel")],
         Mode::Help => vec![("Esc", "close"), ("q", "quit")],

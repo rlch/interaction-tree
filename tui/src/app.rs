@@ -370,6 +370,36 @@ impl App {
             return;
         }
 
+        // Handle session destroyed - remove from local list
+        if event_type == "session.destroyed" {
+            if let Some(session_id) = event.payload.get("sessionId").and_then(|s| s.as_str()) {
+                self.sessions.retain(|s| s.id != session_id);
+                // Adjust picker index if needed
+                if self.session_picker_index >= self.sessions.len() && !self.sessions.is_empty() {
+                    self.session_picker_index = self.sessions.len() - 1;
+                }
+                // Clear selected session if it was destroyed
+                if self.selected_session.as_deref() == Some(session_id) {
+                    self.selected_session = None;
+                    self.app_status = AppStatus::Stopped;
+                }
+            }
+            return;
+        }
+
+        // Handle session created - add to local list
+        if event_type == "session.created" {
+            if let Some(session_data) = event.payload.get("session") {
+                if let Ok(session) = serde_json::from_value::<Session>(session_data.clone()) {
+                    // Only add if not already present
+                    if !self.sessions.iter().any(|s| s.id == session.id) {
+                        self.sessions.push(session);
+                    }
+                }
+            }
+            return;
+        }
+
         if source.contains("agent") || event_type.starts_with("agent_") || event_type.contains("tool") {
             self.push_agent_event(event);
         } else if source.contains("flutter") || event_type.starts_with("flutter.") {
@@ -1006,6 +1036,7 @@ mod tests {
                 app_status: "running".to_string(),
                 vm_service_uri: Some("ws://127.0.0.1:5678".to_string()),
                 pid: Some(1234),
+                connected_clients: Vec::new(),
                 created_at: "2024-01-01T00:00:00Z".to_string(),
                 last_active_at: "2024-01-01T00:00:00Z".to_string(),
             },
@@ -1016,6 +1047,7 @@ mod tests {
                 app_status: "not_running".to_string(),
                 vm_service_uri: None,
                 pid: None,
+                connected_clients: Vec::new(),
                 created_at: "2024-01-01T00:00:00Z".to_string(),
                 last_active_at: "2024-01-01T00:00:00Z".to_string(),
             },
@@ -1029,5 +1061,132 @@ mod tests {
 
         app.session_picker_select();
         assert_eq!(app.selected_session, Some("sess-2".to_string()));
+    }
+
+    #[test]
+    fn test_session_destroyed_event_removes_session() {
+        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
+        app.set_sessions(vec![
+            Session {
+                id: "sess-1".to_string(),
+                name: "app1".to_string(),
+                project_path: "/path/1".to_string(),
+                app_status: "running".to_string(),
+                vm_service_uri: None,
+                pid: None,
+                connected_clients: Vec::new(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                last_active_at: "2024-01-01T00:00:00Z".to_string(),
+            },
+            Session {
+                id: "sess-2".to_string(),
+                name: "app2".to_string(),
+                project_path: "/path/2".to_string(),
+                app_status: "not_running".to_string(),
+                vm_service_uri: None,
+                pid: None,
+                connected_clients: Vec::new(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                last_active_at: "2024-01-01T00:00:00Z".to_string(),
+            },
+        ]);
+
+        assert_eq!(app.sessions.len(), 2);
+        assert_eq!(app.selected_session, Some("sess-1".to_string()));
+
+        // Simulate session.destroyed event
+        let event = MonitoringEvent {
+            ts: "2024-01-01T00:00:00Z".to_string(),
+            source: "session".to_string(),
+            event_type: "session.destroyed".to_string(),
+            payload: serde_json::json!({ "sessionId": "sess-1" }),
+        };
+
+        app.push_event(event);
+
+        // Session should be removed
+        assert_eq!(app.sessions.len(), 1);
+        assert_eq!(app.sessions[0].id, "sess-2");
+        // Selected session was destroyed, should be cleared
+        assert_eq!(app.selected_session, None);
+        // Picker index should be adjusted
+        assert_eq!(app.session_picker_index, 0);
+    }
+
+    #[test]
+    fn test_session_destroyed_event_adjusts_picker_index() {
+        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
+        app.set_sessions(vec![
+            Session {
+                id: "sess-1".to_string(),
+                name: "app1".to_string(),
+                project_path: "/path/1".to_string(),
+                app_status: "running".to_string(),
+                vm_service_uri: None,
+                pid: None,
+                connected_clients: Vec::new(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                last_active_at: "2024-01-01T00:00:00Z".to_string(),
+            },
+            Session {
+                id: "sess-2".to_string(),
+                name: "app2".to_string(),
+                project_path: "/path/2".to_string(),
+                app_status: "not_running".to_string(),
+                vm_service_uri: None,
+                pid: None,
+                connected_clients: Vec::new(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                last_active_at: "2024-01-01T00:00:00Z".to_string(),
+            },
+        ]);
+
+        // Move picker to second session
+        app.session_picker_index = 1;
+
+        // Destroy the second session
+        let event = MonitoringEvent {
+            ts: "2024-01-01T00:00:00Z".to_string(),
+            source: "session".to_string(),
+            event_type: "session.destroyed".to_string(),
+            payload: serde_json::json!({ "sessionId": "sess-2" }),
+        };
+
+        app.push_event(event);
+
+        // Session should be removed
+        assert_eq!(app.sessions.len(), 1);
+        // Picker index should be adjusted to valid range
+        assert_eq!(app.session_picker_index, 0);
+    }
+
+    #[test]
+    fn test_session_created_event_adds_session() {
+        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
+        assert!(app.sessions.is_empty());
+
+        // Simulate session.created event
+        let event = MonitoringEvent {
+            ts: "2024-01-01T00:00:00Z".to_string(),
+            source: "session".to_string(),
+            event_type: "session.created".to_string(),
+            payload: serde_json::json!({
+                "session": {
+                    "id": "sess-new",
+                    "name": "new-app",
+                    "projectPath": "/path/new",
+                    "appStatus": "not_running",
+                    "createdAt": "2024-01-01T00:00:00Z",
+                    "lastActiveAt": "2024-01-01T00:00:00Z"
+                }
+            }),
+        };
+
+        app.push_event(event);
+
+        // Session should be added
+        assert_eq!(app.sessions.len(), 1);
+        assert_eq!(app.sessions[0].id, "sess-new");
+        assert_eq!(app.sessions[0].name, "new-app");
     }
 }

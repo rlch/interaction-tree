@@ -319,22 +319,6 @@ async fn maybe_fetch_tree(app: &mut App, ws: &Option<WsClient>) {
     }
 }
 
-async fn handle_global_keys(app: &mut App, key: KeyEvent, _ws: &Option<WsClient>) -> Result<()> {
-    match key.code {
-        KeyCode::Char('q') => {
-            app.mode = Mode::Confirm(ConfirmAction::Quit);
-        }
-        KeyCode::Char('Q') => {
-            app.should_quit = true;
-        }
-        KeyCode::Char('?') => {
-            app.mode = Mode::Help;
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
 // Command mode - currently unused, hotkey-driven UI instead
 /*
 async fn handle_command_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>) -> Result<()> {

@@ -15,10 +15,9 @@ pub fn render(frame: &mut Frame) {
 
     let help_sections = vec![
         ("Navigation", vec![
-            ("j/k, ↑/↓", "scroll down/up"),
-            ("h/l, ←/→", "prev/next tab"),
+            ("h/l", "prev/next tab"),
+            ("j/k, ↑/↓", "scroll (or navigate tree)"),
             ("g/G", "top/bottom of logs"),
-            ("Tab", "switch pane (content ↔ tree)"),
         ]),
         ("Sessions", vec![
             ("s", "open session picker"),
@@ -30,11 +29,9 @@ pub fn render(frame: &mut Frame) {
             ("x", "stop app (when running)"),
             ("r", "hot reload (when running)"),
             ("R", "hot restart (when running)"),
-            ("t", "fetch widget tree (when running)"),
         ]),
-        ("Tree Pane", vec![
-            ("j/k, ↑/↓", "navigate tree"),
-            ("h/l, ←/→", "collapse/expand"),
+        ("Tree Tab", vec![
+            ("←/→", "collapse/expand node"),
             ("Enter, Space", "toggle node"),
         ]),
         ("Logs", vec![
