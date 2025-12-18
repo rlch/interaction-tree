@@ -9,7 +9,17 @@ use ratatui::{
 
 pub fn render(frame: &mut Frame) {
     let t = theme();
-    let area = centered_rect(60, 70, frame.area());
+    let frame_area = frame.area();
+
+    // Guard against tiny terminal
+    if frame_area.width < 30 || frame_area.height < 10 {
+        return;
+    }
+
+    let area = centered_rect(60, 70, frame_area);
+    if area.width < 20 || area.height < 8 {
+        return;
+    }
 
     frame.render_widget(Clear, area);
 

@@ -9,6 +9,11 @@ use ratatui::{
 };
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
+    // Guard against zero-width areas
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
     let t = theme();
 
     let bindings = match &app.mode {

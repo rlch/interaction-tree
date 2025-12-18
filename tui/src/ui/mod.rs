@@ -19,6 +19,13 @@ use crate::app::{App, ContentTab, Mode};
 use crate::theme::theme;
 
 pub fn render(frame: &mut Frame, app: &mut App) {
+    let area = frame.area();
+
+    // Guard against zero-size terminal
+    if area.width < 10 || area.height < 5 {
+        return;
+    }
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -26,7 +33,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             Constraint::Min(3),    // main content area
             Constraint::Length(1), // help bar
         ])
-        .split(frame.area());
+        .split(area);
 
     status_bar::render(frame, app, chunks[0]);
     render_content_with_tabs(frame, app, chunks[1]);
@@ -46,6 +53,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 }
 
 fn render_content_with_tabs(frame: &mut Frame, app: &mut App, area: Rect) {
+    // Guard against zero-size areas
+    if area.width < 5 || area.height < 2 {
+        return;
+    }
+
     let t = theme();
 
     // Split area for tab bar and content

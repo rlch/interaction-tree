@@ -10,6 +10,11 @@ use ratatui::{
 };
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
+    // Guard against zero-size areas
+    if area.width < 3 || area.height < 3 {
+        return;
+    }
+
     let t = theme();
     let logs: Vec<&FlutterLogEntry> = app.filtered_flutter_logs().collect();
     let log_count = logs.len();

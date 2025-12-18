@@ -13,6 +13,11 @@ use ratatui::{
 use tui_tree_widget::{Tree, TreeItem};
 
 pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
+    // Guard against zero-size areas
+    if area.width < 3 || area.height < 3 {
+        return;
+    }
+
     let t = theme();
 
     let block = Block::default()

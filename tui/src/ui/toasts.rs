@@ -19,8 +19,19 @@ pub fn render(frame: &mut Frame, app: &App) {
     let t = theme();
     let area = frame.area();
 
+    // Guard against tiny terminal
+    if area.width < 20 || area.height < 5 {
+        return;
+    }
+
     // Stack toasts from top-right, going down
     let mut y_offset = 1u16; // Start below status bar
+
+    // Limit toast width to available space
+    let toast_width = MAX_TOAST_WIDTH.min(area.width.saturating_sub(TOAST_PADDING + 2));
+    if toast_width < 10 {
+        return; // Not enough room for readable toasts
+    }
 
     for toast in app.toasts.iter().rev().take(3) {
         let (icon, border_color) = match toast.level {
@@ -31,19 +42,22 @@ pub fn render(frame: &mut Frame, app: &App) {
         };
 
         // Calculate toast dimensions with wrapping
-        let inner_width = MAX_TOAST_WIDTH.saturating_sub(4) as usize; // borders + padding
+        let inner_width = toast_width.saturating_sub(4) as usize; // borders + padding
+        if inner_width == 0 {
+            continue;
+        }
         let wrapped_lines = wrap_text(&toast.message, inner_width);
         let content_height = wrapped_lines.len().max(1) as u16;
         let toast_height = content_height + 2; // borders
 
         // Position in top-right
-        let toast_x = area.width.saturating_sub(MAX_TOAST_WIDTH + TOAST_PADDING);
+        let toast_x = area.width.saturating_sub(toast_width + TOAST_PADDING);
 
         if y_offset + toast_height > area.height.saturating_sub(4) {
             break; // No more room
         }
 
-        let toast_area = Rect::new(toast_x, y_offset, MAX_TOAST_WIDTH, toast_height);
+        let toast_area = Rect::new(toast_x, y_offset, toast_width, toast_height);
 
         // Clear background
         frame.render_widget(Clear, toast_area);
