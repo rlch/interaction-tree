@@ -67,11 +67,26 @@ bun run daemon:install
 # Uninstall launchd service
 bun run daemon:uninstall
 
-# View daemon logs
-bun run daemon:logs
-
 # Check daemon status
 bun run daemon:status
+```
+
+### Logs
+
+All logs are stored in `~/.fleeter/logs/`.
+
+```bash
+# List log files
+bun run logs
+
+# Tail daemon logs
+bun run logs:daemon
+
+# Tail TUI logs  
+bun run logs:tui
+
+# Clear all logs
+bun run logs:clear
 ```
 
 ### Development

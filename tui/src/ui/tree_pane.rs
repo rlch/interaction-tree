@@ -21,12 +21,20 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         .border_style(Style::default().fg(t.border));
 
     if let Some(compact) = app.compact_tree() {
-        let items: Vec<TreeItem<'_, String>> = compact
+        let child_items: Vec<TreeItem<'_, String>> = compact
             .tree
             .iter()
             .enumerate()
             .map(|(i, entry)| build_entry_item(entry, &compact.schemas, i))
             .collect();
+
+        let root_label = Line::from(Span::styled(
+            "Root",
+            Style::new().fg(t.title).add_modifier(Modifier::BOLD),
+        ));
+        let root_item = TreeItem::new("root".to_string(), root_label, child_items)
+            .expect("unique ids");
+        let items = vec![root_item];
 
         let tree_widget = Tree::new(&items)
             .expect("tree items have unique identifiers")

@@ -30,8 +30,12 @@
     "daemon:install": "bun run scripts/daemon-install.ts",
     "daemon:uninstall": "bun run scripts/daemon-uninstall.ts",
     "daemon:status": "bun run scripts/daemon-status.ts",
-    "daemon:logs": "tail -f ~/Library/Logs/fleeter-daemon.log",
-    "daemon:restart": "bun run daemon:uninstall && bun run daemon:install"
+    "daemon:restart": "bun run daemon:uninstall && bun run daemon:install",
+
+    "logs": "ls -la ~/.fleeter/logs/",
+    "logs:daemon": "tail -f ~/.fleeter/logs/daemon-$(date +%Y-%m-%d).log",
+    "logs:tui": "tail -f ~/.fleeter/logs/tui.log.$(date +%Y-%m-%d)",
+    "logs:clear": "rm -rf ~/.fleeter/logs/* && echo 'Logs cleared'"
   },
   "devDependencies": {
     "bun-types": "^1.1.0"

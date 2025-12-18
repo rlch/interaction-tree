@@ -400,6 +400,19 @@ impl App {
             return;
         }
 
+        // Handle tree updates
+        if event_type == "tree.updated" {
+            if let Some(targets) = event.payload.get("targets").and_then(|t| t.as_array()) {
+                let nodes = Self::parse_tree_nodes(targets);
+                let tree = InteractionTree {
+                    nodes,
+                    last_updated: Some(chrono::Utc::now().to_rfc3339()),
+                };
+                self.set_tree(tree);
+            }
+            return;
+        }
+
         if source.contains("agent") || event_type.starts_with("agent_") || event_type.contains("tool") {
             self.push_agent_event(event);
         } else if source.contains("flutter") || event_type.starts_with("flutter.") {

@@ -10,7 +10,8 @@ import { join, dirname } from 'path';
 
 const PLIST_NAME = 'com.fleeter.daemon.plist';
 const LAUNCH_AGENTS_DIR = join(homedir(), 'Library', 'LaunchAgents');
-const LOGS_DIR = join(homedir(), 'Library', 'Logs');
+const FLEETER_DIR = join(homedir(), '.fleeter');
+const LOGS_DIR = join(FLEETER_DIR, 'logs');
 const PLIST_PATH = join(LAUNCH_AGENTS_DIR, PLIST_NAME);
 
 async function main() {
@@ -39,7 +40,7 @@ async function main() {
     mkdirSync(LOGS_DIR, { recursive: true });
   }
 
-  const logPath = join(LOGS_DIR, 'fleeter-daemon.log');
+  const logPath = join(LOGS_DIR, 'launchd.log');
 
   // Generate plist content
   const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
@@ -98,8 +99,8 @@ async function main() {
   try {
     execSync('launchctl list | grep com.fleeter.daemon', { encoding: 'utf-8' });
     console.log('✓ Fleeter daemon is running');
-    console.log(`\nLogs: ${logPath}`);
-    console.log('View logs: bun run daemon:logs');
+    console.log(`\nLogs: ~/.fleeter/logs/`);
+    console.log('View logs: bun run logs:daemon');
   } catch {
     console.log('⚠ Service loaded but may not be running. Check logs:');
     console.log(`  tail -f ${logPath}`);
