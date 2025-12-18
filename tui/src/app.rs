@@ -1,11 +1,23 @@
 use std::collections::VecDeque;
 
+use tui_menu::{MenuItem, MenuState};
 use tui_tree_widget::TreeState;
 
 use crate::flutter_log::FlutterLogEntry;
 use crate::project::ProjectInfo;
 use crate::tree_format::CompactTree;
 use crate::ws::protocol::{AgentResponse, AgentStatus, CommandResponse, MonitoringEvent, Session};
+
+/// Actions available for interaction menu
+#[derive(Debug, Clone, PartialEq)]
+pub enum InteractionAction {
+    Tap,
+    LongPress,
+    DoubleTap,
+    Scroll { dx: f64, dy: f64 },
+    EnterText(String),
+    Custom(String),
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct InteractionTree {
@@ -88,6 +100,8 @@ pub enum Mode {
     SessionPicker,
     /// Prompt for text input with a specific purpose
     InputPrompt(InputPromptKind),
+    /// Action menu for tree node interactions
+    ActionMenu,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,6 +184,11 @@ pub struct App {
 
     pub toasts: VecDeque<Toast>,
     pub toast_ttl_secs: u64,
+
+    /// Action menu state for tree interactions
+    pub action_menu: MenuState<InteractionAction>,
+    /// Currently selected node ID for action menu
+    pub action_menu_node_id: Option<String>,
 
     pub should_quit: bool,
 }
@@ -264,7 +283,59 @@ impl App {
             toasts: VecDeque::new(),
             toast_ttl_secs: 5,
 
+            action_menu: MenuState::new(vec![]),
+            action_menu_node_id: None,
+
             should_quit: false,
+        }
+    }
+
+    /// Build and show action menu for the currently selected tree node
+    pub fn show_action_menu(&mut self) {
+        let caps = self.selected_node_capabilities();
+        let actions = self.selected_node_actions();
+        let node_id = self.selected_node_id();
+
+        if caps.is_empty() && actions.is_empty() {
+            return;
+        }
+
+        let mut items: Vec<MenuItem<InteractionAction>> = Vec::new();
+
+        // Capabilities as menu items
+        if caps.contains(&"tap".to_string()) {
+            items.push(MenuItem::item("Tap", InteractionAction::Tap));
+        }
+        if caps.contains(&"longPress".to_string()) {
+            items.push(MenuItem::item("Long Press", InteractionAction::LongPress));
+        }
+        if caps.contains(&"doubleTap".to_string()) {
+            items.push(MenuItem::item("Double Tap", InteractionAction::DoubleTap));
+        }
+        if caps.contains(&"scroll".to_string()) {
+            items.push(MenuItem::group(
+                "Scroll",
+                vec![
+                    MenuItem::item("Up", InteractionAction::Scroll { dx: 0.0, dy: -100.0 }),
+                    MenuItem::item("Down", InteractionAction::Scroll { dx: 0.0, dy: 100.0 }),
+                    MenuItem::item("Left", InteractionAction::Scroll { dx: -100.0, dy: 0.0 }),
+                    MenuItem::item("Right", InteractionAction::Scroll { dx: 100.0, dy: 0.0 }),
+                ],
+            ));
+        }
+        if caps.contains(&"enterText".to_string()) {
+            items.push(MenuItem::item("Enter Text...", InteractionAction::EnterText(String::new())));
+        }
+
+        // Custom actions
+        for action in actions {
+            items.push(MenuItem::item(action.clone(), InteractionAction::Custom(action)));
+        }
+
+        if !items.is_empty() {
+            self.action_menu = MenuState::new(items);
+            self.action_menu_node_id = node_id;
+            self.mode = Mode::ActionMenu;
         }
     }
 
@@ -364,6 +435,10 @@ impl App {
     pub fn set_tree(&mut self, tree: InteractionTree) {
         self.session.tree = Some(tree);
         self.session.tree_state = TreeState::default();
+        // Expand tree by default - open root node
+        self.session.tree_state.open(vec!["root".to_string()]);
+        // Select root by default
+        self.session.tree_state.select(vec!["root".to_string()]);
     }
 
     pub fn compact_tree(&self) -> Option<CompactTree> {
@@ -371,6 +446,71 @@ impl App {
             let (compact, _warnings) = CompactTree::from_tree_nodes(&t.nodes);
             compact
         })
+    }
+
+    /// Get capabilities for the currently selected tree node
+    pub fn selected_node_capabilities(&self) -> Vec<String> {
+        let compact = match self.compact_tree() {
+            Some(c) => c,
+            None => return Vec::new(),
+        };
+
+        // Get selected identifier from tree state
+        let selected = self.session.tree_state.selected();
+        if selected.is_empty() {
+            return Vec::new();
+        }
+
+        // Extract the ID from the last segment (format: "id_index" or just "id")
+        let last_id = selected.last().unwrap();
+        let node_id = last_id.split('_').next().unwrap_or(last_id);
+
+        // Look up capabilities in schema
+        if let Some(schema) = compact.schemas.get(node_id) {
+            return schema.capabilities.clone();
+        }
+
+        Vec::new()
+    }
+
+    /// Get actions for the currently selected tree node
+    pub fn selected_node_actions(&self) -> Vec<String> {
+        let compact = match self.compact_tree() {
+            Some(c) => c,
+            None => return Vec::new(),
+        };
+
+        let selected = self.session.tree_state.selected();
+        if selected.is_empty() {
+            return Vec::new();
+        }
+
+        let last_id = selected.last().unwrap();
+        let node_id = last_id.split('_').next().unwrap_or(last_id);
+
+        if let Some(schema) = compact.schemas.get(node_id) {
+            return schema.actions.clone();
+        }
+
+        Vec::new()
+    }
+
+    /// Get the ID of the currently selected tree node (for interaction execution)
+    pub fn selected_node_id(&self) -> Option<String> {
+        let selected = self.session.tree_state.selected();
+        if selected.is_empty() {
+            return None;
+        }
+
+        let last_id = selected.last().unwrap();
+        let node_id = last_id.split('_').next().unwrap_or(last_id);
+
+        // Don't return special IDs
+        if node_id == "root" || node_id == "ctx" || node_id == "het" || node_id == "var" {
+            return None;
+        }
+
+        Some(node_id.to_string())
     }
 
     pub fn push_interaction_log(&mut self, entry: LogEntry) {
@@ -449,6 +589,9 @@ impl App {
 
         if source.contains("agent") || event_type.starts_with("agent_") || event_type.contains("tool") {
             self.push_agent_event(event);
+        } else if event_type == "flutter.launching" {
+            // Skip launching event - it's just metadata, not a log line
+            return;
         } else if source.contains("flutter") || event_type.starts_with("flutter.") {
             // Flutter logs go to Flutter tab
             let line = extract_flutter_log(&event.payload);
@@ -459,7 +602,7 @@ impl App {
             let entry = LogEntry {
                 ts: event.ts.clone(),
                 level: LogLevel::Info,
-                message: format!("[{}] {}", event.source, summarize_payload(&event.payload)),
+                message: format_interaction_event(&event.payload),
             };
             self.push_interaction_log(entry);
         }
@@ -505,13 +648,8 @@ impl App {
                    session.vm_service_uri = Some(uri.to_string());
                }
                
-               // Auto-fetch tree when selected session starts running
-               if self.selected_session.as_deref() == Some(session_id) 
-                   && status == Some("running") 
-                   && self.session.tree.is_none() 
-               {
-                   self.needs_tree_fetch = true;
-               }
+               // Note: Don't auto-fetch tree here - the daemon broadcasts tree.updated
+               // automatically after connecting to the VM service
                true
            } else {
                false
@@ -594,6 +732,7 @@ impl App {
                 match serde_json::from_value::<Session>(session.clone()) {
                     Ok(parsed) => {
                         let session_id = parsed.id.clone();
+                        let is_new_session;
                         // Update existing session or add new one
                         if let Some(existing) = self.sessions.iter_mut().find(|s| s.id == session_id) {
                             // Update the existing session with latest data from server
@@ -606,13 +745,19 @@ impl App {
                             existing.app_status = parsed.app_status;
                             existing.pid = parsed.pid;
                             existing.vm_service_uri = parsed.vm_service_uri;
+                            is_new_session = false;
                         } else {
                             // New session, add to list
                             tracing::info!(session_id = %session_id, "Adding new session to list");
                             self.sessions.push(parsed);
                             self.push_toast(Toast::success("Session created"));
+                            is_new_session = true;
                         }
-                        // Auto-select the session
+                        // Reset state if switching to a different session
+                        let switching = self.selected_session.as_deref() != Some(&session_id);
+                        if switching || is_new_session {
+                            self.reset_session_state();
+                        }
                         self.selected_session = Some(session_id);
                         if let Some(idx) = self.sessions.iter().position(|s| s.id == self.selected_session.as_deref().unwrap_or_default()) {
                             self.session_picker_index = idx;
@@ -636,10 +781,7 @@ impl App {
                         session.vm_service_uri = resp.data.get("uri").and_then(|u| u.as_str()).map(String::from);
                     }
                 }
-                // Auto-fetch tree when app starts running
-                if status == "running" && self.session.tree.is_none() {
-                    self.needs_tree_fetch = true;
-                }
+                // Note: Don't auto-fetch tree - daemon broadcasts tree.updated after VM connects
             } else if resp.data.get("pid").is_some() {
                 // run_app response returns { pid, vmServiceUri } - update pid/uri but NOT status
                 // Status is already updated via session.status_changed events
@@ -841,6 +983,34 @@ fn summarize_payload(payload: &serde_json::Value) -> String {
         serde_json::Value::Array(arr) => format!("[{} items]", arr.len()),
         other => truncate(&other.to_string(), 80),
     }
+}
+
+fn format_interaction_event(payload: &serde_json::Value) -> String {
+    let id = payload.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+    let interaction = payload.get("interaction").and_then(|v| v.as_str()).unwrap_or("?");
+    let result = payload.get("result").and_then(|v| v.as_object());
+    
+    let success = result
+        .and_then(|r| r.get("success"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    
+    let status = if success { "✓" } else { "✗" };
+    
+    // Include args if present (e.g., text for enterText)
+    let args_str = if let Some(args) = payload.get("args").and_then(|v| v.as_object()) {
+        if let Some(text) = args.get("text").and_then(|v| v.as_str()) {
+            format!(" \"{}\"", truncate(text, 20))
+        } else if args.is_empty() {
+            String::new()
+        } else {
+            format!(" {:?}", args.keys().collect::<Vec<_>>())
+        }
+    } else {
+        String::new()
+    };
+    
+    format!("{} {}({}){}",status, interaction, id, args_str)
 }
 
 fn extract_flutter_log(payload: &serde_json::Value) -> String {
@@ -1084,6 +1254,64 @@ mod tests {
 
         // Toast should be shown (can't easily check content, but toasts queue should have one)
         assert_eq!(app.toasts.len(), 1);
+    }
+
+    #[test]
+    fn test_create_session_clears_old_logs() {
+        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
+        
+        // Setup: have an existing session with logs
+        app.sessions.push(Session {
+            id: "old-session".to_string(),
+            name: "old".to_string(),
+            project_path: "/old".to_string(),
+            app_status: "running".to_string(),
+            vm_service_uri: None,
+            pid: None,
+            connected_clients: Vec::new(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            last_active_at: "2024-01-01T00:00:00Z".to_string(),
+        });
+        app.selected_session = Some("old-session".to_string());
+        app.mode = Mode::Normal;
+        
+        // Add some logs to the old session
+        app.push_interaction_log(LogEntry {
+            ts: "2024-01-01T00:00:00Z".to_string(),
+            level: LogLevel::Info,
+            message: "old session log".to_string(),
+        });
+        app.session.agent_events.push_back(make_event("agent", "tool_call"));
+        
+        assert!(!app.session.interaction_logs.is_empty());
+        assert!(!app.session.agent_events.is_empty());
+        
+        // Now create a new session
+        let resp = CommandResponse {
+            id: "1".to_string(),
+            success: true,
+            data: serde_json::json!({
+                "session": {
+                    "id": "new-session",
+                    "name": "new",
+                    "projectPath": "/new",
+                    "appStatus": "not_running",
+                    "createdAt": "2024-01-01T00:00:00Z",
+                    "lastActiveAt": "2024-01-01T00:00:00Z"
+                }
+            }),
+            error: None,
+        };
+        
+        app.handle_command_response(resp);
+        
+        // Session should be switched
+        assert_eq!(app.selected_session, Some("new-session".to_string()));
+        
+        // Old logs should be cleared
+        assert!(app.session.interaction_logs.is_empty(), "interaction_logs should be cleared");
+        assert!(app.session.agent_events.is_empty(), "agent_events should be cleared");
+        assert!(app.session.flutter_logs.is_empty(), "flutter_logs should be cleared");
     }
 
     #[test]

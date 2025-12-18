@@ -12,7 +12,8 @@ use ratatui::Terminal;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::app::{App, ConfirmAction, ContentTab, InputPromptKind, Mode, WsState};
+use crate::app::{App, ConfirmAction, ContentTab, InputPromptKind, InteractionAction, Mode, WsState};
+use tui_menu::MenuEvent;
 use crate::ws::protocol::Session;
 use crate::commands::{parse_command, TuiCommand};
 use crate::ui;
@@ -138,6 +139,7 @@ async fn handle_key_event(
         Mode::Confirm(action) => handle_confirm_mode(app, key, action.clone()),
         Mode::SessionPicker => handle_session_picker_mode(app, key, ws).await?,
         Mode::InputPrompt(kind) => handle_input_prompt_mode(app, key, ws, kind.clone()).await?,
+        Mode::ActionMenu => handle_action_menu_mode(app, key, ws).await?,
     }
 
     Ok(())
@@ -169,6 +171,7 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) {
 async fn handle_normal_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>) -> Result<()> {
     // Tree tab has special navigation (tree_up/down instead of scroll)
     let on_tree_tab = app.content_tab == ContentTab::Tree;
+    let on_flutter_tab = app.content_tab == ContentTab::Flutter;
 
     match key.code {
         KeyCode::Char('q') => {
@@ -177,7 +180,8 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>)
         KeyCode::Char('Q') => {
             app.should_quit = true;
         }
-        KeyCode::Char('r') => {
+        // Flutter-tab specific: hot reload
+        KeyCode::Char('r') if on_flutter_tab => {
             if app.is_app_running() {
                 if let Some(client) = ws {
                     let msg = OutgoingMessage::Command {
@@ -192,7 +196,8 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>)
                 }
             }
         }
-        KeyCode::Char('R') => {
+        // Flutter-tab specific: hot restart
+        KeyCode::Char('R') if on_flutter_tab => {
             if app.is_app_running() {
                 if let Some(client) = ws {
                     let msg = OutgoingMessage::Command {
@@ -207,7 +212,50 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>)
                 }
             }
         }
-        KeyCode::Char('/') => {
+        // Flutter-tab specific: run app
+        KeyCode::Char('p') if on_flutter_tab => {
+            if !app.is_app_running() && app.has_session() {
+                app.mode = Mode::InputPrompt(InputPromptKind::RunApp);
+                app.input_buffer.clear();
+            }
+        }
+        // Flutter-tab specific: stop app
+        KeyCode::Char('x') if on_flutter_tab => {
+            if app.is_app_running() {
+                if let Some(client) = ws {
+                    let msg = OutgoingMessage::Command {
+                        id: Uuid::new_v4().to_string(),
+                        client_id: client.client_id().to_string(),
+                        action: "stop_app".to_string(),
+                        key: None,
+                        data: None,
+                    };
+                    let _ = client.send(msg).await;
+                }
+            }
+        }
+        // Tree-tab specific: tap interaction
+        KeyCode::Char('t') if on_tree_tab => {
+            if app.selected_node_capabilities().contains(&"tap".to_string()) {
+                if let Some(node_id) = app.selected_node_id() {
+                    execute_interaction(app, ws, &node_id, "tap", None).await?;
+                }
+            }
+        }
+        // Tree-tab specific: longPress interaction (using 'L' to not conflict with tab nav)
+        KeyCode::Char('L') if on_tree_tab => {
+            if app.selected_node_capabilities().contains(&"longPress".to_string()) {
+                if let Some(node_id) = app.selected_node_id() {
+                    execute_interaction(app, ws, &node_id, "longPress", None).await?;
+                }
+            }
+        }
+        // Tree-tab specific: actions menu
+        KeyCode::Char('a') if on_tree_tab => {
+            app.show_action_menu();
+        }
+        // Filter mode (not on tree tab where it would conflict)
+        KeyCode::Char('/') if !on_tree_tab => {
             app.mode = Mode::Filter;
             app.input_buffer.clear();
         }
@@ -228,23 +276,24 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>)
                 app.scroll_up();
             }
         }
-        KeyCode::Char('g') => {
+        KeyCode::Char('g') if !on_tree_tab => {
             app.scroll_offset = 0;
         }
-        KeyCode::Char('G') => {
+        KeyCode::Char('G') if !on_tree_tab => {
             let count = current_event_count(app);
             if count > 0 {
                 app.scroll_offset = count - 1;
             }
         }
-        KeyCode::Char('c') => {
+        // Clear events (not on tree tab)
+        KeyCode::Char('c') if !on_tree_tab => {
             app.clear_events();
         }
-        KeyCode::Char('f') => {
+        KeyCode::Char('f') if !on_tree_tab => {
             app.filter = None;
         }
-        // Tab navigation: h/l always switch tabs, arrow keys do tree collapse/expand on Tree tab
-        KeyCode::Char('l') => {
+        // Tab navigation: h/l always switch tabs (except on tree tab where l is used for longPress)
+        KeyCode::Char('l') if !on_tree_tab => {
             app.next_tab();
             maybe_fetch_tree(app, ws).await;
         }
@@ -268,38 +317,52 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>)
                 maybe_fetch_tree(app, ws).await;
             }
         }
+        KeyCode::Tab => {
+            app.next_tab();
+            maybe_fetch_tree(app, ws).await;
+        }
+        KeyCode::BackTab => {
+            app.prev_tab();
+            maybe_fetch_tree(app, ws).await;
+        }
         KeyCode::Enter | KeyCode::Char(' ') if on_tree_tab => {
             app.tree_toggle();
         }
         KeyCode::Char('s') => {
             app.mode = Mode::SessionPicker;
         }
-        // Run app (play) - show device prompt
-        KeyCode::Char('p') => {
-            if !app.is_app_running() && app.has_session() {
-                app.mode = Mode::InputPrompt(InputPromptKind::RunApp);
-                app.input_buffer.clear();
-            }
-        }
-        // Stop app
-        KeyCode::Char('x') => {
-            if app.is_app_running() {
-                if let Some(client) = ws {
-                    let msg = OutgoingMessage::Command {
-                        id: Uuid::new_v4().to_string(),
-                        client_id: client.client_id().to_string(),
-                        action: "stop_app".to_string(),
-                        key: None,
-                        data: None,
-                    };
-                    let _ = client.send(msg).await;
-                }
-            }
-        }
         KeyCode::Esc => {
             app.filter = None;
         }
         _ => {}
+    }
+    Ok(())
+}
+
+async fn execute_interaction(
+    app: &mut App,
+    ws: &Option<WsClient>,
+    node_id: &str,
+    interaction: &str,
+    args: Option<serde_json::Value>,
+) -> Result<()> {
+    if let Some(client) = ws {
+        let mut data = serde_json::json!({
+            "nodeId": node_id,
+            "interaction": interaction,
+        });
+        if let Some(args) = args {
+            data["args"] = args;
+        }
+        let msg = OutgoingMessage::Command {
+            id: Uuid::new_v4().to_string(),
+            client_id: client.client_id().to_string(),
+            action: "execute_interaction".to_string(),
+            key: None,
+            data: Some(data),
+        };
+        let _ = client.send(msg).await;
+        app.push_toast(crate::app::Toast::info(format!("{} on {}", interaction, node_id)));
     }
     Ok(())
 }
@@ -317,6 +380,86 @@ async fn maybe_fetch_tree(app: &mut App, ws: &Option<WsClient>) {
             let _ = client.send(msg).await;
         }
     }
+}
+
+async fn handle_action_menu_mode(
+    app: &mut App,
+    key: KeyEvent,
+    ws: &Option<WsClient>,
+) -> Result<()> {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.action_menu.reset();
+            app.action_menu_node_id = None;
+            app.mode = Mode::Normal;
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            app.action_menu.down();
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            app.action_menu.up();
+        }
+        KeyCode::Char('h') | KeyCode::Left => {
+            app.action_menu.left();
+        }
+        KeyCode::Char('l') | KeyCode::Right => {
+            app.action_menu.right();
+        }
+        KeyCode::Enter => {
+            app.action_menu.select();
+        }
+        _ => {}
+    }
+
+    // Process menu events
+    for event in app.action_menu.drain_events() {
+        match event {
+            MenuEvent::Selected(action) => {
+                if let Some(node_id) = app.action_menu_node_id.clone() {
+                    match action {
+                        InteractionAction::Tap => {
+                            execute_interaction(app, ws, &node_id, "tap", None).await?;
+                        }
+                        InteractionAction::LongPress => {
+                            execute_interaction(app, ws, &node_id, "longPress", None).await?;
+                        }
+                        InteractionAction::DoubleTap => {
+                            execute_interaction(app, ws, &node_id, "doubleTap", None).await?;
+                        }
+                        InteractionAction::Scroll { dx, dy } => {
+                            execute_interaction(
+                                app,
+                                ws,
+                                &node_id,
+                                "scroll",
+                                Some(serde_json::json!({ "dx": dx, "dy": dy })),
+                            )
+                            .await?;
+                        }
+                        InteractionAction::EnterText(_) => {
+                            // TODO: Show text input prompt
+                            app.push_toast(crate::app::Toast::info("Enter text not implemented yet"));
+                        }
+                        InteractionAction::Custom(action_name) => {
+                            execute_interaction(
+                                app,
+                                ws,
+                                &node_id,
+                                &action_name,
+                                None,
+                            )
+                            .await?;
+                        }
+                    }
+                }
+                app.action_menu.reset();
+                app.action_menu_node_id = None;
+                app.mode = Mode::Normal;
+            }
+        }
+    }
+
+    Ok(())
 }
 
 // Command mode - currently unused, hotkey-driven UI instead
@@ -378,24 +521,32 @@ async fn handle_command_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>
 fn handle_filter_mode(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {
-            app.mode = Mode::Normal;
-            app.input_buffer.clear();
-        }
-        KeyCode::Enter => {
-            if app.input_buffer.is_empty() {
-                app.filter = None;
-            } else {
-                app.filter = Some(app.input_buffer.clone());
-            }
+            // Cancel: clear filter and input
+            app.filter = None;
             app.input_buffer.clear();
             app.mode = Mode::Normal;
             app.scroll_offset = 0;
         }
+        KeyCode::Enter => {
+            // Finish: keep current filter, exit filter mode
+            app.input_buffer.clear();
+            app.mode = Mode::Normal;
+        }
         KeyCode::Backspace => {
             app.input_buffer.pop();
+            // Apply filter live
+            app.filter = if app.input_buffer.is_empty() {
+                None
+            } else {
+                Some(app.input_buffer.clone())
+            };
+            app.scroll_offset = 0;
         }
         KeyCode::Char(c) => {
             app.input_buffer.push(c);
+            // Apply filter live
+            app.filter = Some(app.input_buffer.clone());
+            app.scroll_offset = 0;
         }
         _ => {}
     }
@@ -806,9 +957,12 @@ mod tests {
         let mut app = App::new("ws://localhost:9000".to_string(), 100, test_project());
         app.mode = Mode::Filter;
         app.input_buffer = "flutter".to_string();
+        // Filter is applied live while typing, so set it to match
+        app.filter = Some("flutter".to_string());
 
         handle_filter_mode(&mut app, KeyEvent::from(KeyCode::Enter));
 
+        // Enter keeps the current filter (which was already applied live)
         assert_eq!(app.filter, Some("flutter".to_string()));
         assert_eq!(app.mode, Mode::Normal);
         assert!(app.input_buffer.is_empty());
@@ -818,11 +972,13 @@ mod tests {
     fn test_handle_filter_mode_empty_clears_filter() {
         let mut app = App::new("ws://localhost:9000".to_string(), 100, test_project());
         app.mode = Mode::Filter;
-        app.filter = Some("old".to_string());
+        // When input is empty, filter should already be None (live update)
+        app.filter = None;
         app.input_buffer.clear();
 
         handle_filter_mode(&mut app, KeyEvent::from(KeyCode::Enter));
 
+        // Enter just exits filter mode, keeping filter as-is (None when empty)
         assert!(app.filter.is_none());
         assert_eq!(app.mode, Mode::Normal);
     }

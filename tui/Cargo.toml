@@ -1,9 +1,43 @@
-[package]
-name = "it-tui"
+[workspace]
+members = [".", "crates/agent-tui", "crates/agent-protocol", "crates/agent-backend"]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
-description = "TUI client for interaction-tree-server monitoring"
 license = "MIT"
+
+[workspace.dependencies]
+# Protocol
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
+uuid = { version = "1", features = ["v4"] }
+
+# Async
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+async-trait = "0.1"
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Utils
+anyhow = "1"
+tracing = "0.1"
+
+# Workspace crates
+agent-protocol = { path = "crates/agent-protocol" }
+agent-backend = { path = "crates/agent-backend" }
+
+[package]
+name = "it-tui"
+version.workspace = true
+edition.workspace = true
+description = "TUI client for interaction-tree-server monitoring"
+license.workspace = true
 
 [[bin]]
 name = "it-tui"
@@ -19,6 +53,7 @@ tui-tree-widget = "0.23"
 throbber-widgets-tui = "0.9"
 tui-widgets = "0.5"
 tui-textarea = { version = "0.7", default-features = false, features = ["crossterm"] }
+tui-menu = "0.3"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

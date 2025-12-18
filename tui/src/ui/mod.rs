@@ -1,3 +1,4 @@
+mod action_menu;
 mod agent_pane;
 mod completion_popup;
 mod flutter_pane;
@@ -46,6 +47,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     if matches!(app.mode, Mode::SessionPicker | Mode::InputPrompt(_)) {
         session_picker::render(frame, app);
+    }
+
+    if matches!(app.mode, Mode::ActionMenu) {
+        action_menu::render(frame, app);
     }
 
     // Toasts (always on top)

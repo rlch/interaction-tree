@@ -49,7 +49,11 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                     .fg(t.text_highlight)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("▶ ");
+            // Use different symbols for cursor (→) vs expand/collapse (±/∓)
+            .highlight_symbol("→ ")
+            .node_closed_symbol("▸ ")
+            .node_open_symbol("▾ ")
+            .node_no_children_symbol("  ");
 
         frame.render_stateful_widget(tree_widget, area, &mut app.session.tree_state);
     } else {
