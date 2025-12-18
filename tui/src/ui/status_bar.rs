@@ -10,71 +10,16 @@ use ratatui::{
 use throbber_widgets_tui::ThrobberState;
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
+    // Guard against zero-width areas
+    if area.width == 0 {
+        return;
+    }
+    
     let t = theme();
 
     let sep = Span::styled(" │ ", Style::default().fg(t.text_dim));
 
-    // === LEFT SIDE ===
-    let mut left_spans = vec![
-        Span::raw(" "),
-        Span::styled(
-            &app.project.name,
-            Style::default().fg(t.info),
-        ),
-    ];
-
-    // Selected session - use current_session() as single source of truth
-    if let Some(session) = app.current_session() {
-        left_spans.push(sep.clone());
-        left_spans.push(Span::styled(
-            format!("@{}", truncate(&session.name, 12)),
-            Style::default().fg(t.source_tree),
-        ));
-
-        // Show app status from Session struct (single source of truth)
-        match session.app_status.as_str() {
-            "running" => {
-                left_spans.push(sep.clone());
-                if let Some(pid) = session.pid {
-                    left_spans.push(Span::styled(
-                        format!("pid {} ", pid),
-                        Style::default().fg(t.success),
-                    ));
-                } else {
-                    left_spans.push(Span::styled(
-                        "running ",
-                        Style::default().fg(t.success),
-                    ));
-                }
-                if let Some(uri) = &session.vm_service_uri {
-                    if !uri.is_empty() {
-                        left_spans.push(Span::styled(uri.clone(), Style::default().fg(t.text_dim)));
-                    }
-                }
-            }
-            "starting" => {
-                left_spans.push(sep.clone());
-                left_spans.push(Span::styled(
-                    "starting…",
-                    Style::default()
-                        .fg(t.warning)
-                        .add_modifier(Modifier::ITALIC),
-                ));
-            }
-            "stopped" | "not_running" => {
-                left_spans.push(sep.clone());
-                left_spans.push(Span::styled("stopped", Style::default().fg(t.error)));
-            }
-            "error" => {
-                left_spans.push(sep.clone());
-                left_spans.push(Span::styled("error", Style::default().fg(t.error)));
-            }
-            _ => {}
-        }
-    }
-
-
-    // === RIGHT SIDE ===
+    // === RIGHT SIDE (calculate first to know remaining space) ===
     let mut right_spans: Vec<Span> = vec![];
 
     // Throbber when pending response or connecting
@@ -103,8 +48,79 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     };
     right_spans.push(Span::raw(" "));
 
-    // Calculate widths
     let right_width: usize = right_spans.iter().map(|s| s.content.len()).sum();
+    let left_max_width = (area.width as usize).saturating_sub(right_width + 1);
+
+    // === LEFT SIDE ===
+    let mut left_spans = vec![
+        Span::raw(" "),
+        Span::styled(
+            truncate(&app.project.name, 20),
+            Style::default().fg(t.info),
+        ),
+    ];
+
+    // Selected session - use current_session() as single source of truth
+    if let Some(session) = app.current_session() {
+        left_spans.push(sep.clone());
+        left_spans.push(Span::styled(
+            format!("@{}", truncate(&session.name, 12)),
+            Style::default().fg(t.source_tree),
+        ));
+
+        // Show app status from Session struct (single source of truth)
+        match session.app_status.as_str() {
+            "running" => {
+                left_spans.push(sep.clone());
+                if let Some(pid) = session.pid {
+                    left_spans.push(Span::styled(
+                        format!("pid {}", pid),
+                        Style::default().fg(t.success),
+                    ));
+                } else {
+                    left_spans.push(Span::styled(
+                        "running",
+                        Style::default().fg(t.success),
+                    ));
+                }
+                // Only show URI if we have space (calculate current length)
+                let current_len: usize = left_spans.iter().map(|s| s.content.len()).sum();
+                if let Some(uri) = &session.vm_service_uri {
+                    if !uri.is_empty() {
+                        let remaining = left_max_width.saturating_sub(current_len + 1);
+                        if remaining > 10 {
+                            left_spans.push(Span::raw(" "));
+                            left_spans.push(Span::styled(
+                                truncate(uri, remaining),
+                                Style::default().fg(t.text_dim),
+                            ));
+                        }
+                    }
+                }
+            }
+            "starting" => {
+                left_spans.push(sep.clone());
+                left_spans.push(Span::styled(
+                    "starting…",
+                    Style::default()
+                        .fg(t.warning)
+                        .add_modifier(Modifier::ITALIC),
+                ));
+            }
+            "stopped" | "not_running" => {
+                left_spans.push(sep.clone());
+                left_spans.push(Span::styled("stopped", Style::default().fg(t.error)));
+            }
+            "error" => {
+                left_spans.push(sep.clone());
+                left_spans.push(Span::styled("error", Style::default().fg(t.error)));
+            }
+            _ => {}
+        }
+    }
+
+    // Calculate widths - ensure right_width doesn't exceed area
+    let right_width = right_width.min(area.width as usize);
     let layout = Layout::horizontal([
         Constraint::Min(0),
         Constraint::Length(right_width as u16),
