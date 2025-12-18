@@ -8,6 +8,9 @@ export interface FlutterProcess {
     pid: number;
     logs: string[];
     vmServiceUri?: string;
+    devToolsUri?: string;
+    appId?: string;
+    deviceId?: string;
     startedAt?: Date;
 }
 export interface RunAppOptions {

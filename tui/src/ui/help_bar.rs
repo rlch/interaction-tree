@@ -12,53 +12,58 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let t = theme();
 
     let bindings = match &app.mode {
-            Mode::Normal => {
-                match app.selected_pane {
-                    Pane::Tree => vec![
-                        ("↑↓", "navigate"),
-                        ("Enter", "expand"),
-                        ("Tab", "next pane"),
-                        ("Esc", "back"),
-                        ("q", "quit"),
-                    ],
-                    _ => {
-                        let mut bindings = vec![("s", "sessions")];
-                        
-                        if app.has_session() {
-                            if app.is_app_running() {
-                                bindings.push(("x", "stop"));
-                                bindings.push(("r", "reload"));
-                                bindings.push(("R", "restart"));
-                                if app.tree.is_none() {
-                                    bindings.push(("t", "tree"));
-                                }
-                            } else {
-                                bindings.push(("p", "run"));
-                            }
+        Mode::Normal => {
+            match app.selected_pane {
+                Pane::Tree => vec![
+                    ("↑↓/jk", "navigate"),
+                    ("←→/hl", "collapse/expand"),
+                    ("Enter", "toggle"),
+                    ("Tab", "content pane"),
+                    ("?", "help"),
+                    ("q", "quit"),
+                ],
+                Pane::Content => {
+                    let mut bindings = vec![
+                        ("←→/hl", "tabs"),
+                        ("↑↓/jk", "scroll"),
+                        ("/", "filter"),
+                        ("s", "sessions"),
+                    ];
+
+                    if app.has_session() {
+                        if app.is_app_running() {
+                            bindings.push(("r", "reload"));
+                            bindings.push(("R", "restart"));
+                            bindings.push(("x", "stop"));
+                            bindings.push(("t", "tree"));
+                        } else {
+                            bindings.push(("p", "run"));
                         }
-                        
-                        bindings.push(("c", "clear"));
-                        bindings.push(("?", "help"));
-                        bindings
                     }
+
+                    if app.tree.is_some() {
+                        bindings.push(("Tab", "tree pane"));
+                    }
+                    bindings.push(("c", "clear"));
+                    bindings.push(("?", "help"));
+                    bindings
                 }
             }
-            Mode::Filter => vec![("Enter", "apply"), ("Esc", "cancel")],
-            Mode::Help => vec![("Esc", "close"), ("q", "quit")],
-            Mode::Confirm(_) => vec![("y", "confirm"), ("n/Esc", "cancel")],
-            Mode::SessionPicker => vec![
-                ("↑↓", "select"),
-                ("Enter", "connect"),
-                ("c", "create"),
-                ("d", "delete"),
-                ("Esc", "close"),
-            ],
-            Mode::InputPrompt(kind) => {
-                match kind {
-                    InputPromptKind::CreateSession => vec![("Enter", "create"), ("Esc", "cancel")],
-                    InputPromptKind::RunApp => vec![("Enter", "run"), ("Esc", "cancel")],
-                }
-            }
+        }
+        Mode::Filter => vec![("Enter", "apply"), ("Esc", "cancel")],
+        Mode::Help => vec![("Esc", "close"), ("q", "quit")],
+        Mode::Confirm(_) => vec![("y", "confirm"), ("n/Esc", "cancel")],
+        Mode::SessionPicker => vec![
+            ("↑↓/jk", "select"),
+            ("Enter", "connect"),
+            ("c", "create"),
+            ("d", "delete"),
+            ("Esc", "close"),
+        ],
+        Mode::InputPrompt(kind) => match kind {
+            InputPromptKind::CreateSession => vec![("Enter", "create"), ("Esc", "cancel")],
+            InputPromptKind::RunApp => vec![("Enter", "run (empty=default)"), ("Esc", "cancel")],
+        },
     };
 
     let mut spans = Vec::new();

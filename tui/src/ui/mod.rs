@@ -29,25 +29,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         .split(frame.area());
 
     status_bar::render(frame, app, chunks[0]);
-
-    // Main content: split or single
-    if app.tree.is_some() {
-        // Split view: content tabs | tree
-        let main_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(60), // content
-                Constraint::Percentage(40), // tree
-            ])
-            .split(chunks[1]);
-
-        render_content_with_tabs(frame, app, main_chunks[0]);
-        tree_pane::render(frame, app, main_chunks[1]);
-    } else {
-        // Single pane: content tabs only
-        render_content_with_tabs(frame, app, chunks[1]);
-    }
-
+    render_content_with_tabs(frame, app, chunks[1]);
     help_bar::render(frame, app, chunks[2]);
 
     // Overlays
@@ -63,7 +45,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     toasts::render(frame, app);
 }
 
-fn render_content_with_tabs(frame: &mut Frame, app: &App, area: Rect) {
+fn render_content_with_tabs(frame: &mut Frame, app: &mut App, area: Rect) {
     let t = theme();
 
     // Split area for tab bar and content
@@ -76,25 +58,31 @@ fn render_content_with_tabs(frame: &mut Frame, app: &App, area: Rect) {
         .split(area);
 
     // Render tab bar
-    let tab_titles: Vec<Line> = [ContentTab::Flutter, ContentTab::Agent, ContentTab::Interactions]
-        .iter()
-        .map(|tab| {
-            let is_active = app.content_tab == *tab;
-            let style = if is_active {
-                Style::default()
-                    .fg(t.title)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(t.text_dim)
-            };
-            Line::from(Span::styled(tab.label(), style))
-        })
-        .collect();
+    let tab_titles: Vec<Line> = [
+        ContentTab::Flutter,
+        ContentTab::Agent,
+        ContentTab::Interactions,
+        ContentTab::Tree,
+    ]
+    .iter()
+    .map(|tab| {
+        let is_active = app.content_tab == *tab;
+        let style = if is_active {
+            Style::default()
+                .fg(t.title)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(t.text_dim)
+        };
+        Line::from(Span::styled(tab.label(), style))
+    })
+    .collect();
 
     let selected_index = match app.content_tab {
         ContentTab::Flutter => 0,
         ContentTab::Agent => 1,
         ContentTab::Interactions => 2,
+        ContentTab::Tree => 3,
     };
 
     let tabs = Tabs::new(tab_titles)
@@ -110,5 +98,6 @@ fn render_content_with_tabs(frame: &mut Frame, app: &App, area: Rect) {
         ContentTab::Flutter => flutter_pane::render(frame, app, content_chunks[1]),
         ContentTab::Agent => agent_pane::render(frame, app, content_chunks[1]),
         ContentTab::Interactions => interactions_pane::render(frame, app, content_chunks[1]),
+        ContentTab::Tree => tree_pane::render(frame, app, content_chunks[1]),
     }
 }

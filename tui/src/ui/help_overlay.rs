@@ -15,37 +15,39 @@ pub fn render(frame: &mut Frame) {
 
     let help_sections = vec![
         ("Navigation", vec![
-            ("j/k", "scroll down/up"),
-            ("g/G", "top/bottom"),
-            ("Tab", "switch pane"),
-            ("PgUp/PgDn", "page up/down"),
+            ("j/k, ↑/↓", "scroll down/up"),
+            ("h/l, ←/→", "prev/next tab"),
+            ("g/G", "top/bottom of logs"),
+            ("Tab", "switch pane (content ↔ tree)"),
         ]),
-        ("Flutter", vec![
-            ("r", "hot reload"),
-            ("R", "hot restart"),
-            ("p", "toggle performance overlay"),
-            ("o", "toggle debug paint"),
-            ("w", "toggle wireframe"),
+        ("Sessions", vec![
+            ("s", "open session picker"),
+            ("c", "create new session (in picker)"),
+            ("d", "delete session (in picker)"),
         ]),
-        ("Modes", vec![
-            (":", "command mode"),
-            ("/", "filter mode"),
-            ("?", "help (this screen)"),
+        ("App Control", vec![
+            ("p", "run app (when stopped)"),
+            ("x", "stop app (when running)"),
+            ("r", "hot reload (when running)"),
+            ("R", "hot restart (when running)"),
+            ("t", "fetch widget tree (when running)"),
         ]),
-        ("Commands", vec![
-            (":reload", "hot reload"),
-            (":restart", "hot restart"),
-            (":stop", "stop app"),
-            (":tree", "request widget tree"),
-            (":filter <pat>", "filter events"),
-            (":clear", "clear events"),
-            (":quit", "quit application"),
+        ("Tree Pane", vec![
+            ("j/k, ↑/↓", "navigate tree"),
+            ("h/l, ←/→", "collapse/expand"),
+            ("Enter, Space", "toggle node"),
+        ]),
+        ("Logs", vec![
+            ("/", "filter logs"),
+            ("f", "clear filter"),
+            ("c", "clear all logs"),
         ]),
         ("General", vec![
-            ("q", "quit"),
+            ("?", "toggle help"),
+            ("q", "quit (with confirm)"),
             ("Q", "force quit"),
-            ("Esc", "cancel/close"),
             ("Ctrl+C", "quit"),
+            ("Esc", "cancel/close"),
         ]),
     ];
 

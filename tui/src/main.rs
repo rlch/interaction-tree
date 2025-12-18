@@ -1,14 +1,18 @@
+mod address;
 mod app;
 mod commands;
 mod event;
+mod flutter_log;
 mod project;
 mod theme;
+mod tree_format;
 mod ui;
 mod ws;
 
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -42,10 +46,17 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Setup logging to file (TUI owns stdout)
-    let log_file = std::fs::File::create("/tmp/fleeter.log")?;
+    let log_dir = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?
+        .join(".fleeter/logs");
+    std::fs::create_dir_all(&log_dir)?;
+
+    let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "tui");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
     tracing_subscriber::registry()
-        .with(EnvFilter::from_default_env().add_directive("it_tui=debug".parse()?))
-        .with(fmt::layer().with_writer(log_file).with_ansi(false))
+        .with(EnvFilter::from_default_env().add_directive("it_tui=trace".parse()?))
+        .with(fmt::layer().with_writer(non_blocking).with_ansi(false))
         .init();
 
     let args = Args::parse();

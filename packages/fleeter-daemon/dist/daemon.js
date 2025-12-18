@@ -5,6 +5,7 @@ import { SessionManager } from './session/index.js';
 import { DaemonServer } from './ws/index.js';
 import { FlutterProcessManager } from './flutter/index.js';
 import { VMServiceClient } from './vm/index.js';
+import { log } from './logger.js';
 export class Daemon {
     config;
     sessionManager;
@@ -21,16 +22,49 @@ export class Daemon {
     }
     setupFlutterEvents() {
         this.flutterManager.on('started', async (sessionId, vmServiceUri) => {
+            log.daemon.info({ sessionId, vmServiceUri }, 'Flutter app started');
             this.sessionManager.updateStatus(sessionId, 'running', { vmServiceUri });
             // Connect VM client
             const vmClient = new VMServiceClient();
             try {
                 await vmClient.connect(vmServiceUri);
                 this.vmClients.set(sessionId, vmClient);
-                console.error(`[daemon] VM client connected for session ${sessionId}`);
+                log.daemon.info({ sessionId }, 'VM client connected');
+                // Listen for real-time tree change events (like DevTools)
+                vmClient.on('treeChanged', async () => {
+                    log.tree.debug({ sessionId }, 'treeChanged event received');
+                    try {
+                        // Fetch updated tree and broadcast to clients
+                        log.tree.debug({ sessionId }, 'Fetching tree...');
+                        const tree = await vmClient.getTree({ summaryOnly: true });
+                        log.tree.info({ sessionId, nodeCount: Array.isArray(tree) ? tree.length : 0 }, 'Tree fetched, broadcasting');
+                        this.server.broadcastEvent('tree', 'tree.updated', { tree }, sessionId);
+                    }
+                    catch (err) {
+                        log.tree.error({ sessionId, err }, 'Failed to fetch tree on change');
+                    }
+                });
+                vmClient.on('navigation', (route) => {
+                    log.tree.info({ sessionId, route }, 'Navigation event');
+                    this.server.broadcastEvent('tree', 'tree.navigation', { route }, sessionId);
+                });
+                vmClient.on('reload', () => {
+                    log.tree.info({ sessionId }, 'Reload event');
+                    this.server.broadcastEvent('tree', 'tree.reloaded', {}, sessionId);
+                });
+                // Fetch initial tree after connection
+                log.tree.debug({ sessionId }, 'Fetching initial tree...');
+                try {
+                    const tree = await vmClient.getTree({ summaryOnly: true });
+                    log.tree.info({ sessionId, nodeCount: Array.isArray(tree) ? tree.length : 0 }, 'Initial tree fetched');
+                    this.server.broadcastEvent('tree', 'tree.updated', { tree }, sessionId);
+                }
+                catch (err) {
+                    log.tree.warn({ sessionId, err }, 'Initial tree fetch failed (extension may not be loaded)');
+                }
             }
             catch (err) {
-                console.error(`[daemon] Failed to connect VM client: ${err}`);
+                log.daemon.error({ sessionId, err }, 'Failed to connect VM client');
             }
         });
         this.flutterManager.on('exit', (sessionId) => {
@@ -42,12 +76,23 @@ export class Daemon {
             }
         });
         this.flutterManager.on('log', (sessionId, line) => {
+            // Store log in session for persistence across reconnects
+            this.sessionManager.addLog(sessionId, line);
             this.server.broadcastEvent('flutter', 'flutter.log', { line }, sessionId);
         });
         this.flutterManager.on('error', (sessionId, err) => {
             console.error(`[daemon] Flutter error for session ${sessionId}: ${err.message}`);
             this.sessionManager.updateStatus(sessionId, 'error', { error: err.message });
             this.server.broadcastEvent('flutter', 'flutter.error', { error: err.message }, sessionId);
+        });
+        // Broadcast session status changes to connected clients
+        this.sessionManager.on('session:status_changed', (session) => {
+            this.server.broadcastEvent('session', 'session.status_changed', {
+                sessionId: session.id,
+                status: session.appStatus,
+                pid: session.pid,
+                vmServiceUri: session.vmServiceUri,
+            }, session.id);
         });
     }
     async start() {

@@ -12,7 +12,7 @@ use ratatui::Terminal;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::app::{App, ConfirmAction, InputPromptKind, Mode, Pane, WsState};
+use crate::app::{App, ConfirmAction, ContentTab, InputPromptKind, Mode, Pane, WsState};
 use crate::ws::protocol::Session;
 use crate::commands::{parse_command, TuiCommand};
 use crate::ui;
@@ -63,6 +63,21 @@ async fn run_event_loop(
         // Expire old toasts and tick throbber
         app.expire_toasts();
         app.throbber_state.calc_next();
+
+        // Auto-fetch tree if needed
+        if app.needs_tree_fetch {
+            app.needs_tree_fetch = false;
+            if let Some(ref client) = ws_client {
+                let msg = OutgoingMessage::Command {
+                    id: Uuid::new_v4().to_string(),
+                    client_id: client.client_id().to_string(),
+                    action: "get_tree".to_string(),
+                    key: None,
+                    data: None,
+                };
+                let _ = client.send(msg).await;
+            }
+        }
 
         terminal.draw(|f| ui::render(f, app))?;
 
@@ -193,6 +208,7 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>)
                                 data: None,
                             };
                             let _ = client.send(msg).await;
+                            app.push_toast(crate::app::Toast::info("Hot reload triggered"));
                         }
                     }
                 }
@@ -207,20 +223,7 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>)
                                 data: None,
                             };
                             let _ = client.send(msg).await;
-                        }
-                    }
-                }
-                KeyCode::Char('t') => {
-                    if app.is_app_running() {
-                        if let Some(client) = ws {
-                            let msg = OutgoingMessage::Command {
-                                id: Uuid::new_v4().to_string(),
-                                client_id: client.client_id().to_string(),
-                                action: "get_tree".to_string(),
-                                key: None,
-                                data: None,
-                            };
-                            let _ = client.send(msg).await;
+                            app.push_toast(crate::app::Toast::info("Hot restart triggered"));
                         }
                     }
                 }
@@ -254,9 +257,35 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>)
                 }
                 KeyCode::Char('l') | KeyCode::Right => {
                     app.next_tab();
+                    // Auto-fetch tree when switching to Tree tab
+                    if app.content_tab == ContentTab::Tree && app.tree.is_none() && app.is_app_running() {
+                        if let Some(client) = ws {
+                            let msg = OutgoingMessage::Command {
+                                id: Uuid::new_v4().to_string(),
+                                client_id: client.client_id().to_string(),
+                                action: "get_tree".to_string(),
+                                key: None,
+                                data: None,
+                            };
+                            let _ = client.send(msg).await;
+                        }
+                    }
                 }
                 KeyCode::Char('h') | KeyCode::Left => {
                     app.prev_tab();
+                    // Auto-fetch tree when switching to Tree tab
+                    if app.content_tab == ContentTab::Tree && app.tree.is_none() && app.is_app_running() {
+                        if let Some(client) = ws {
+                            let msg = OutgoingMessage::Command {
+                                id: Uuid::new_v4().to_string(),
+                                client_id: client.client_id().to_string(),
+                                action: "get_tree".to_string(),
+                                key: None,
+                                data: None,
+                            };
+                            let _ = client.send(msg).await;
+                        }
+                    }
                 }
                 KeyCode::Char('s') => {
                     app.mode = Mode::SessionPicker;
@@ -555,6 +584,7 @@ fn current_event_count(app: &App) -> usize {
         ContentTab::Flutter => app.filtered_flutter_logs().count(),
         ContentTab::Agent => app.filtered_agent_events().count(),
         ContentTab::Interactions => app.filtered_interaction_logs().count(),
+        ContentTab::Tree => 0, // Tree uses tree_state, not scroll_offset
     }
 }
 
@@ -768,6 +798,7 @@ fn session_from_summary(s: SessionSummary) -> Session {
         app_status: s.app_status,
         vm_service_uri: None,
         pid: None,
+        connected_clients: Vec::new(),
         created_at: String::new(),
         last_active_at: String::new(),
     }

@@ -99,6 +99,11 @@ export class DaemonServer {
                         return;
                     }
                     const session = this.sessionManager.create({ name, projectPath });
+                    // Auto-connect the creating client to the new session
+                    this.sessionManager.connectClient(session.id, clientId);
+                    const clientEntry = this.clients.get(clientId);
+                    if (clientEntry)
+                        clientEntry.client.currentSessionId = session.id;
                     sendResponse({ success: true, data: { session } });
                     this.broadcastEvent('session', 'session.created', { session });
                     break;
@@ -129,6 +134,20 @@ export class DaemonServer {
                     const clientEntry = this.clients.get(clientId);
                     if (clientEntry)
                         clientEntry.client.currentSessionId = sessionId;
+                    // Send stored logs to the connecting client
+                    const storedLogs = this.sessionManager.getLogs(sessionId, 500);
+                    if (storedLogs.length > 0) {
+                        for (const line of storedLogs) {
+                            ws.send(JSON.stringify({
+                                type: 'event',
+                                ts: new Date().toISOString(),
+                                source: 'flutter',
+                                eventType: 'flutter.log',
+                                sessionId,
+                                payload: { line },
+                            }));
+                        }
+                    }
                     sendResponse({ success: true, data: { session } });
                     break;
                 }
@@ -242,7 +261,8 @@ export class DaemonServer {
                         return;
                     }
                     const options = data;
-                    const logs = this.flutterManager.getLogs(sessionId, options?.maxLines);
+                    // Get logs from session (persisted) instead of process (ephemeral)
+                    const logs = this.sessionManager.getLogs(sessionId, options?.maxLines);
                     sendResponse({ success: true, data: { logs } });
                     break;
                 }
@@ -320,12 +340,17 @@ export class DaemonServer {
             sessionId,
             payload,
         };
+        const clientCount = this.clients.size;
+        console.error(`[ws] Broadcasting ${eventType} to ${clientCount} clients`);
         const message = JSON.stringify(event);
+        let sentCount = 0;
         for (const { ws } of this.clients.values()) {
             if (ws.readyState === WebSocket.OPEN) {
                 ws.send(message);
+                sentCount++;
             }
         }
+        console.error(`[ws] Sent ${eventType} to ${sentCount}/${clientCount} clients`);
     }
     getClientCount() {
         return this.clients.size;

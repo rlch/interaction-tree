@@ -1,7 +1,7 @@
 use crate::app::{App, AppStatus, TreeNode, WsState};
 use crate::theme::theme;
 use ratatui::{
-    layout::Rect,
+    layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
@@ -14,8 +14,8 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 
     let sep = Span::styled(" │ ", Style::default().fg(t.text_dim));
 
-    // Project name (first item now)
-    let mut spans = vec![
+    // === LEFT SIDE ===
+    let mut left_spans = vec![
         Span::raw(" "),
         Span::styled(
             &app.project.name,
@@ -31,22 +31,80 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             .find(|s| s.id == *session_id)
             .map(|s| s.name.as_str())
             .unwrap_or(session_id.as_str());
-        spans.push(sep.clone());
-        spans.push(Span::styled(
+        left_spans.push(sep.clone());
+        left_spans.push(Span::styled(
             format!("@{}", truncate(session_name, 12)),
             Style::default().fg(t.source_tree),
         ));
     }
 
-    spans.push(sep.clone());
+    // Show VM service URI when running, otherwise show daemon URI
+    match &app.app_status {
+        AppStatus::Running { pid, uri } if !uri.is_empty() => {
+            left_spans.push(sep.clone());
+            left_spans.push(Span::styled(
+                format!("pid {} ", pid),
+                Style::default().fg(t.success),
+            ));
+            left_spans.push(Span::styled(uri.clone(), Style::default().fg(t.text_dim)));
+        }
+        AppStatus::Starting => {
+            left_spans.push(sep.clone());
+            left_spans.push(Span::styled(
+                "starting…",
+                Style::default()
+                    .fg(t.warning)
+                    .add_modifier(Modifier::ITALIC),
+            ));
+        }
+        AppStatus::Running { pid, .. } => {
+            left_spans.push(sep.clone());
+            left_spans.push(Span::styled(
+                format!("running (pid {})", pid),
+                Style::default().fg(t.success),
+            ));
+        }
+        AppStatus::Stopped => {
+            left_spans.push(sep.clone());
+            left_spans.push(Span::styled("stopped", Style::default().fg(t.error)));
+        }
+        AppStatus::Error(e) => {
+            left_spans.push(sep.clone());
+            left_spans.push(Span::styled(
+                format!("error: {}", truncate(e, 30)),
+                Style::default().fg(t.error),
+            ));
+        }
+        AppStatus::Unknown => {}
+    }
 
-    // Connection status with throbber when connecting
+    // Widget count if tree exists
+    if let Some(tree) = &app.tree {
+        let count = count_nodes(&tree.nodes);
+        left_spans.push(sep.clone());
+        left_spans.push(Span::styled(
+            format!("{} widgets", count),
+            Style::default().fg(t.source_tree),
+        ));
+    }
+
+    // === RIGHT SIDE ===
+    let mut right_spans: Vec<Span> = vec![];
+
+    // Throbber when pending response or connecting
+    if app.pending_response || app.ws_state == WsState::Connecting {
+        let throbber_spans = render_throbber(&app.throbber_state);
+        right_spans.extend(throbber_spans);
+        right_spans.push(Span::raw(" "));
+    }
+
+    // Connection status
     match app.ws_state {
         WsState::Connected => {
-            spans.push(Span::styled("Connected", Style::default().fg(t.success)));
+            right_spans.push(Span::styled("Connected", Style::default().fg(t.success)));
         }
         WsState::Connecting => {
-            spans.push(Span::styled(
+            right_spans.push(Span::styled(
                 "Connecting",
                 Style::default()
                     .fg(t.warning)
@@ -54,57 +112,24 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             ));
         }
         WsState::Disconnected => {
-            spans.push(Span::styled("Disconnected", Style::default().fg(t.error)));
+            right_spans.push(Span::styled("Disconnected", Style::default().fg(t.error)));
         }
     };
+    right_spans.push(Span::raw(" "));
 
-    spans.push(sep.clone());
-    spans.push(Span::styled(&app.server_uri, Style::default().fg(t.text_dim)));
+    // Calculate widths
+    let right_width: usize = right_spans.iter().map(|s| s.content.len()).sum();
+    let layout = Layout::horizontal([
+        Constraint::Min(0),
+        Constraint::Length(right_width as u16),
+    ])
+    .split(area);
 
-    // App status
-    let app_status = match &app.app_status {
-        AppStatus::Unknown => Span::styled("unknown", Style::default().fg(t.text_dim)),
-        AppStatus::Starting => Span::styled(
-            "starting…",
-            Style::default()
-                .fg(t.warning)
-                .add_modifier(Modifier::ITALIC),
-        ),
-        AppStatus::Running { pid, .. } => Span::styled(
-            format!("running (pid {})", pid),
-            Style::default().fg(t.success),
-        ),
-        AppStatus::Stopped => Span::styled("stopped", Style::default().fg(t.error)),
-        AppStatus::Error(e) => Span::styled(
-            format!("error: {}", truncate(e, 30)),
-            Style::default().fg(t.error),
-        ),
-    };
+    let left_line = Line::from(left_spans);
+    let right_line = Line::from(right_spans);
 
-    spans.push(sep.clone());
-    spans.push(Span::raw("app: "));
-    spans.push(app_status);
-
-    // Widget count if tree exists
-    if let Some(tree) = &app.tree {
-        let count = count_nodes(&tree.nodes);
-        spans.push(sep.clone());
-        spans.push(Span::styled(
-            format!("{} widgets", count),
-            Style::default().fg(t.source_tree),
-        ));
-    }
-
-    // Throbber when pending response or connecting
-    if app.pending_response || app.ws_state == WsState::Connecting {
-        spans.push(Span::raw(" "));
-        let throbber_spans = render_throbber(&app.throbber_state);
-        spans.extend(throbber_spans);
-    }
-
-    let line = Line::from(spans);
-    let paragraph = Paragraph::new(line);
-    frame.render_widget(paragraph, area);
+    frame.render_widget(Paragraph::new(left_line), layout[0]);
+    frame.render_widget(Paragraph::new(right_line), layout[1]);
 }
 
 fn render_throbber(state: &ThrobberState) -> Vec<Span<'static>> {

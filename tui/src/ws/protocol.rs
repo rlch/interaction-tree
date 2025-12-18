@@ -45,7 +45,8 @@ pub struct SessionSummary {
 pub struct MonitoringEvent {
     pub ts: String,
     pub source: String,
-    #[serde(rename = "type")]
+    /// Event type - daemon sends as "eventType", some legacy sources use "type"
+    #[serde(alias = "type", rename = "eventType")]
     pub event_type: String,
     #[serde(default)]
     pub payload: serde_json::Value,
@@ -66,6 +67,8 @@ pub struct Session {
     pub vm_service_uri: Option<String>,
     #[serde(default)]
     pub pid: Option<u32>,
+    #[serde(rename = "connectedClients", default)]
+    pub connected_clients: Vec<String>,
     #[serde(rename = "createdAt")]
     pub created_at: String,
     #[serde(rename = "lastActiveAt")]
@@ -102,7 +105,7 @@ pub enum OutgoingMessage {
 pub enum IncomingMessage {
     CommandResponse(CommandResponse),
     AgentResponse(AgentResponse),
-    #[serde(untagged)]
+    /// Monitoring events from daemon (type: "event")
     Event(MonitoringEvent),
 }
 
@@ -203,13 +206,27 @@ mod tests {
 
     #[test]
     fn test_monitoring_event_fallback() {
-        // Events without a specific type tag should parse as Event
-        let json = r#"{"ts":"2024-01-01T00:00:00Z","source":"flutter","type":"flutter.log","payload":{"line":"hello"}}"#;
+        // Events with eventType field should parse as Event
+        let json = r#"{"ts":"2024-01-01T00:00:00Z","source":"flutter","type":"event","eventType":"flutter.log","payload":{"line":"hello"}}"#;
         let msg: IncomingMessage = serde_json::from_str(json).expect("parse failed");
         match msg {
             IncomingMessage::Event(event) => {
                 assert_eq!(event.source, "flutter");
                 assert_eq!(event.event_type, "flutter.log");
+            }
+            _ => panic!("Expected Event, got {:?}", msg),
+        }
+    }
+
+    #[test]
+    fn test_session_destroyed_event() {
+        let json = r#"{"ts":"2024-01-01T00:00:00Z","source":"session","type":"event","eventType":"session.destroyed","payload":{"sessionId":"sess-123"}}"#;
+        let msg: IncomingMessage = serde_json::from_str(json).expect("parse failed");
+        match msg {
+            IncomingMessage::Event(event) => {
+                assert_eq!(event.source, "session");
+                assert_eq!(event.event_type, "session.destroyed");
+                assert_eq!(event.payload["sessionId"], "sess-123");
             }
             _ => panic!("Expected Event, got {:?}", msg),
         }

@@ -1,21 +1,48 @@
 /**
  * VM Service client for connecting to Flutter apps.
  * Implements JSON-RPC 2.0 over WebSocket.
+ *
+ * Subscribes to VM Service event streams (Extension, Debug) to receive
+ * real-time notifications like Flutter.Frame and Flutter.Navigation,
+ * similar to how Flutter DevTools gets widget tree updates.
  */
+import { EventEmitter } from 'events';
 import type { InteractionTarget, InteractionResult, BatchStep, BatchResult, GetTreeOptions, LogEntry, RuntimeError, HotReloadResult, AppStatus } from './types.js';
-export declare class VMServiceClient {
+/** Events emitted by VMServiceClient */
+export interface VMServiceEvents {
+    /** Fired when tree may have changed (Frame, Navigation, Reload events) */
+    treeChanged: () => void;
+    /** Fired on Flutter.Frame events (rate-limited) */
+    frame: () => void;
+    /** Fired on Flutter.Navigation events */
+    navigation: (route?: string) => void;
+    /** Fired on isolate reload (hot reload/restart) */
+    reload: () => void;
+    /** Fired when connection closes */
+    close: () => void;
+}
+export declare class VMServiceClient extends EventEmitter {
     private ws;
     private requestId;
     private pending;
     private isolateId;
     private uri;
     private onCloseCallbacks;
+    private frameRateLimiter;
+    private receivedNavigationEvent;
+    private receivedReloadEvent;
     get isConnected(): boolean;
     get connectionUri(): string | null;
     /**
      * Connect to a Flutter app via VM service WebSocket.
+     * Subscribes to Extension and Isolate event streams for real-time updates.
      */
     connect(uri: string): Promise<void>;
+    /**
+     * Subscribe to VM Service event streams for real-time updates.
+     * Similar to how Flutter DevTools receives widget tree change notifications.
+     */
+    private subscribeToStreams;
     /**
      * Disconnect from the VM service.
      */
@@ -47,6 +74,11 @@ export declare class VMServiceClient {
     private callMethod;
     private callExtension;
     private handleMessage;
+    /**
+     * Handle incoming VM Service stream events.
+     * Emits appropriate events for tree updates.
+     */
+    private handleStreamEvent;
     private handleClose;
 }
 //# sourceMappingURL=client.d.ts.map

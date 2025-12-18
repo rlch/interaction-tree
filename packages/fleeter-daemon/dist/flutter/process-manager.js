@@ -6,19 +6,21 @@ import { EventEmitter } from 'events';
 import { existsSync } from 'fs';
 import { join } from 'path';
 const VM_SERVICE_URI_REGEX = /Observatory\s+(?:listening\s+on|debugger\s+and\s+profiler\s+available\s+at)\s+(wss?:\/\/\S+)/i;
+const DEVTOOLS_URI_REGEX = /Flutter DevTools.*?available at:\s+(https?:\/\/\S+)/i;
 const MAX_LOGS = 1000;
 /**
- * Find the Flutter executable using Bun's native which() function.
- * Falls back to checking common installation paths when running under
- * environments without full PATH (e.g., launchd).
+ * Find the Flutter executable.
+ * Uses Bun's which() if available, otherwise falls back to common paths.
  */
 function findFlutterExecutable() {
-    // Use Bun's native which() - handles PATH resolution properly
-    const flutterPath = Bun.which('flutter');
-    if (flutterPath) {
-        return flutterPath;
+    // Try Bun's native which() if running under Bun
+    if (typeof globalThis.Bun !== 'undefined') {
+        const flutterPath = globalThis.Bun.which('flutter');
+        if (flutterPath) {
+            return flutterPath;
+        }
     }
-    // Fallback: check common installation paths for environments without PATH
+    // Fallback: check common installation paths
     const homeDir = process.env.HOME || '';
     const commonPaths = [
         // FVM (Flutter Version Manager)
@@ -89,11 +91,19 @@ export class FlutterProcessManager extends EventEmitter {
                         continue;
                     this.addLog(sessionId, line);
                     this.emit('log', sessionId, line);
-                    // Parse machine output for VM service URI
+                    // Parse machine output for VM service URI, appId, deviceId
                     if (line.startsWith('[{') || line.startsWith('{')) {
                         try {
                             const events = line.startsWith('[') ? JSON.parse(line) : [JSON.parse(line)];
                             for (const event of events) {
+                                // Capture appId and deviceId from app.start event
+                                if (event.event === 'app.start' && event.params) {
+                                    if (event.params.appId)
+                                        flutterProcess.appId = event.params.appId;
+                                    if (event.params.deviceId)
+                                        flutterProcess.deviceId = event.params.deviceId;
+                                }
+                                // Capture VM service URI from app.debugPort event
                                 if (event.params?.wsUri) {
                                     vmServiceUri = event.params.wsUri;
                                 }
@@ -113,11 +123,19 @@ export class FlutterProcessManager extends EventEmitter {
                             // Not JSON
                         }
                     }
-                    // Fallback regex
+                    // Fallback regex for VM service URI
                     if (!vmServiceUri) {
                         const match = line.match(VM_SERVICE_URI_REGEX);
                         if (match)
                             vmServiceUri = match[1];
+                    }
+                    // Capture DevTools URI from plain text output
+                    if (!flutterProcess.devToolsUri) {
+                        const devToolsMatch = line.match(DEVTOOLS_URI_REGEX);
+                        if (devToolsMatch) {
+                            flutterProcess.devToolsUri = devToolsMatch[1];
+                            this.emit('devtools', sessionId, flutterProcess.devToolsUri);
+                        }
                     }
                 }
             };

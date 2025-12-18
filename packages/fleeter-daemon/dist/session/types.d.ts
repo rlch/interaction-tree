@@ -14,6 +14,7 @@ export interface SessionInfo {
     createdAt: string;
     lastActiveAt: string;
 }
+export declare const MAX_SESSION_LOGS = 1000;
 export interface Session {
     id: string;
     name: string;
@@ -25,6 +26,7 @@ export interface Session {
     createdAt: Date;
     lastActiveAt: Date;
     agent?: AgentExecutor;
+    logs: string[];
 }
 export interface CreateSessionOptions {
     name: string;

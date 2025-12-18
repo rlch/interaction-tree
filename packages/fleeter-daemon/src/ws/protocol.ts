@@ -105,7 +105,7 @@ export interface AgentResponse {
 export interface MonitoringEvent {
   type: 'event';
   ts: string;
-  source: 'flutter' | 'vm' | 'agent' | 'daemon' | 'session';
+  source: 'flutter' | 'vm' | 'agent' | 'daemon' | 'session' | 'tree';
   eventType: string;
   sessionId?: string;
   payload: unknown;

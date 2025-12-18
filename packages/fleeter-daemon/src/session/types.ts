@@ -18,6 +18,8 @@ export interface SessionInfo {
   lastActiveAt: string;
 }
 
+export const MAX_SESSION_LOGS = 1000;
+
 export interface Session {
   id: string;
   name: string;
@@ -29,6 +31,7 @@ export interface Session {
   createdAt: Date;
   lastActiveAt: Date;
   agent?: AgentExecutor;  // Per-session agent
+  logs: string[];  // Persisted logs (survives process restarts)
 }
 
 export interface CreateSessionOptions {

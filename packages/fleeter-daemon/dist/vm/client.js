@@ -1,15 +1,49 @@
 /**
  * VM Service client for connecting to Flutter apps.
  * Implements JSON-RPC 2.0 over WebSocket.
+ *
+ * Subscribes to VM Service event streams (Extension, Debug) to receive
+ * real-time notifications like Flutter.Frame and Flutter.Navigation,
+ * similar to how Flutter DevTools gets widget tree updates.
  */
+import { EventEmitter } from 'events';
 import WebSocket from 'ws';
-export class VMServiceClient {
+import { log } from '../logger.js';
+/** Rate limiter for frame events (like DevTools at 5 FPS) */
+class RateLimiter {
+    fps;
+    lastCall = 0;
+    pending = false;
+    constructor(fps) {
+        this.fps = fps;
+    }
+    call(fn) {
+        const now = Date.now();
+        const minInterval = 1000 / this.fps;
+        if (now - this.lastCall >= minInterval) {
+            this.lastCall = now;
+            fn();
+        }
+        else if (!this.pending) {
+            this.pending = true;
+            setTimeout(() => {
+                this.pending = false;
+                this.lastCall = Date.now();
+                fn();
+            }, minInterval - (now - this.lastCall));
+        }
+    }
+}
+export class VMServiceClient extends EventEmitter {
     ws = null;
     requestId = 0;
     pending = new Map();
     isolateId = null;
     uri = null;
     onCloseCallbacks = [];
+    frameRateLimiter = new RateLimiter(5); // 5 FPS like DevTools
+    receivedNavigationEvent = false;
+    receivedReloadEvent = false;
     get isConnected() {
         return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
     }
@@ -18,8 +52,10 @@ export class VMServiceClient {
     }
     /**
      * Connect to a Flutter app via VM service WebSocket.
+     * Subscribes to Extension and Isolate event streams for real-time updates.
      */
     async connect(uri) {
+        log.vm.info({ uri }, 'Connecting to VM service');
         if (this.ws) {
             await this.disconnect();
         }
@@ -27,11 +63,16 @@ export class VMServiceClient {
         return new Promise((resolve, reject) => {
             this.ws = new WebSocket(uri);
             this.ws.on('open', async () => {
+                log.vm.debug('WebSocket opened');
                 try {
                     await this.findMainIsolate();
+                    log.vm.info({ isolateId: this.isolateId }, 'Found main isolate');
+                    await this.subscribeToStreams();
+                    log.vm.info('VM client connected and subscribed to streams');
                     resolve();
                 }
                 catch (err) {
+                    log.vm.error({ err }, 'Failed to initialize VM client');
                     // Close the socket if we can't find the isolate
                     this.ws?.close();
                     this.ws = null;
@@ -46,9 +87,33 @@ export class VMServiceClient {
                 this.handleClose();
             });
             this.ws.on('error', (err) => {
+                log.vm.error({ err: err.message }, 'WebSocket error');
                 reject(new Error(`WebSocket error: ${err.message}`));
             });
         });
+    }
+    /**
+     * Subscribe to VM Service event streams for real-time updates.
+     * Similar to how Flutter DevTools receives widget tree change notifications.
+     */
+    async subscribeToStreams() {
+        log.vm.debug('Subscribing to VM Service streams');
+        try {
+            // Subscribe to Extension events (Flutter.Frame, Flutter.Navigation, etc.)
+            const extResult = await this.callMethod('streamListen', { streamId: 'Extension' });
+            log.vm.debug({ result: extResult }, 'Subscribed to Extension stream');
+        }
+        catch (err) {
+            log.vm.warn({ err }, 'Failed to subscribe to Extension stream (may already be subscribed)');
+        }
+        try {
+            // Subscribe to Isolate events (reload, restart)
+            const isoResult = await this.callMethod('streamListen', { streamId: 'Isolate' });
+            log.vm.debug({ result: isoResult }, 'Subscribed to Isolate stream');
+        }
+        catch (err) {
+            log.vm.warn({ err }, 'Failed to subscribe to Isolate stream (may already be subscribed)');
+        }
     }
     /**
      * Disconnect from the VM service.
@@ -218,22 +283,83 @@ export class VMServiceClient {
     }
     handleMessage(data) {
         try {
-            const response = JSON.parse(data);
-            if (response.id !== undefined) {
-                const pending = this.pending.get(response.id);
+            const message = JSON.parse(data);
+            // Handle stream events (notifications without id)
+            if (message.method === 'streamNotify' && message.params) {
+                log.vm.trace({ streamId: message.params.streamId, event: message.params.event }, 'Received stream notification');
+                this.handleStreamEvent(message.params);
+                return;
+            }
+            // Handle responses to our requests
+            if (message.id !== undefined) {
+                const pending = this.pending.get(message.id);
                 if (pending) {
-                    this.pending.delete(response.id);
-                    if (response.error) {
-                        pending.reject(new Error(response.error.message || 'Unknown error'));
+                    this.pending.delete(message.id);
+                    if (message.error) {
+                        log.vm.debug({ id: message.id, error: message.error }, 'Request failed');
+                        pending.reject(new Error(message.error.message || 'Unknown error'));
                     }
                     else {
-                        pending.resolve(response.result);
+                        pending.resolve(message.result);
                     }
                 }
             }
         }
-        catch {
-            // Ignore parse errors for now
+        catch (err) {
+            log.vm.warn({ err, data: data.substring(0, 200) }, 'Failed to parse message');
+        }
+    }
+    /**
+     * Handle incoming VM Service stream events.
+     * Emits appropriate events for tree updates.
+     */
+    handleStreamEvent(params) {
+        const { streamId, event } = params;
+        if (!event) {
+            log.vm.debug({ streamId }, 'Stream event with no event data');
+            return;
+        }
+        // Extension events (Flutter.Frame, Flutter.Navigation, etc.)
+        if (streamId === 'Extension') {
+            const extensionKind = event.extensionKind;
+            log.vm.debug({ extensionKind }, 'Extension event received');
+            if (extensionKind === 'Flutter.Frame') {
+                // Rate-limit frame events to 5 FPS
+                // Only trigger tree update after navigation or reload
+                if (this.receivedNavigationEvent || this.receivedReloadEvent) {
+                    log.vm.debug('Frame event after nav/reload - triggering tree update');
+                    this.frameRateLimiter.call(() => {
+                        this.receivedNavigationEvent = false;
+                        this.receivedReloadEvent = false;
+                        this.emit('frame');
+                        this.emit('treeChanged');
+                    });
+                }
+            }
+            else if (extensionKind === 'Flutter.Navigation') {
+                log.vm.info({ extensionData: event.extensionData }, 'Navigation event');
+                this.receivedNavigationEvent = true;
+                const route = event.extensionData?.route;
+                this.emit('navigation', route);
+                // Emit tree changed immediately on navigation
+                this.emit('treeChanged');
+            }
+            else if (extensionKind === 'Flutter.FirstFrame') {
+                log.vm.info('First frame event - triggering initial tree fetch');
+                // First frame after app start - definitely want tree
+                this.emit('treeChanged');
+            }
+            else {
+                log.vm.trace({ extensionKind }, 'Unhandled extension event');
+            }
+        }
+        // Isolate events (reload, restart)
+        if (streamId === 'Isolate') {
+            if (event.kind === 'IsolateReload') {
+                this.receivedReloadEvent = true;
+                this.emit('reload');
+                this.emit('treeChanged');
+            }
         }
     }
     handleClose() {
@@ -244,10 +370,12 @@ export class VMServiceClient {
             reject(new Error('Connection closed'));
         }
         this.pending.clear();
-        // Notify listeners
+        // Notify listeners (legacy callback style)
         for (const callback of this.onCloseCallbacks) {
             callback();
         }
+        // Emit close event (new EventEmitter style)
+        this.emit('close');
     }
 }
 //# sourceMappingURL=client.js.map

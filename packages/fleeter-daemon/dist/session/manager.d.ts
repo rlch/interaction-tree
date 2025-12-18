@@ -45,6 +45,18 @@ export declare class SessionManager extends EventEmitter {
         pid?: number;
         error?: string;
     }): void;
+    /**
+     * Add a log line to a session. Logs persist across process restarts.
+     */
+    addLog(sessionId: string, line: string): void;
+    /**
+     * Get logs for a session.
+     */
+    getLogs(sessionId: string, maxLines?: number): string[];
+    /**
+     * Clear logs for a session.
+     */
+    clearLogs(sessionId: string): void;
     private toInfo;
 }
 //# sourceMappingURL=manager.d.ts.map

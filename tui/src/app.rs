@@ -2,7 +2,9 @@ use std::collections::VecDeque;
 
 use tui_tree_widget::TreeState;
 
+use crate::flutter_log::FlutterLogEntry;
 use crate::project::ProjectInfo;
+use crate::tree_format::CompactTree;
 use crate::ws::protocol::{AgentResponse, AgentStatus, CommandResponse, MonitoringEvent, Session};
 
 #[derive(Debug, Clone, Default)]
@@ -12,10 +14,13 @@ pub struct InteractionTree {
     pub last_updated: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TreeNode {
     pub id: String,
+    #[serde(default)]
     pub widget_type: Option<String>,
+    #[serde(default)]
     pub children: Vec<TreeNode>,
 }
 
@@ -63,12 +68,6 @@ pub enum ConfirmAction {
     Quit,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Pane {
-    Content,
-    Tree,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ContentTab {
     /// Flutter logs (from flutter run process)
@@ -78,6 +77,8 @@ pub enum ContentTab {
     Agent,
     /// Interaction execution history
     Interactions,
+    /// Interaction tree viewer
+    Tree,
 }
 
 impl ContentTab {
@@ -85,15 +86,17 @@ impl ContentTab {
         match self {
             ContentTab::Flutter => ContentTab::Agent,
             ContentTab::Agent => ContentTab::Interactions,
-            ContentTab::Interactions => ContentTab::Flutter,
+            ContentTab::Interactions => ContentTab::Tree,
+            ContentTab::Tree => ContentTab::Flutter,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            ContentTab::Flutter => ContentTab::Interactions,
+            ContentTab::Flutter => ContentTab::Tree,
             ContentTab::Agent => ContentTab::Flutter,
             ContentTab::Interactions => ContentTab::Agent,
+            ContentTab::Tree => ContentTab::Interactions,
         }
     }
 
@@ -102,6 +105,7 @@ impl ContentTab {
             ContentTab::Flutter => "Flutter",
             ContentTab::Agent => "Agent",
             ContentTab::Interactions => "Interactions",
+            ContentTab::Tree => "Tree",
         }
     }
 }
@@ -118,7 +122,7 @@ pub struct App {
     pub app_status: AppStatus,
 
     /// Flutter logs (from flutter run process)
-    pub flutter_logs: VecDeque<LogEntry>,
+    pub flutter_logs: VecDeque<FlutterLogEntry>,
     /// Agent events (tool calls, responses)
     pub agent_events: VecDeque<MonitoringEvent>,
     /// Interaction execution history (taps, scrolls, etc.)
@@ -128,7 +132,6 @@ pub struct App {
     pub mode: Mode,
     pub input_buffer: String,
     pub filter: Option<String>,
-    pub selected_pane: Pane,
     pub content_tab: ContentTab,
     pub scroll_offset: usize,
 
@@ -140,6 +143,8 @@ pub struct App {
 
     pub tree: Option<InteractionTree>,
     pub tree_state: TreeState<String>,
+    pub needs_tree_fetch: bool,
+    pub pending_session_connect: Option<String>,
 
     pub throbber_state: throbber_widgets_tui::ThrobberState,
 
@@ -235,7 +240,6 @@ impl App {
             mode: Mode::SessionPicker,
             input_buffer: String::new(),
             filter: None,
-            selected_pane: Pane::Content,
             content_tab: ContentTab::default(),
             scroll_offset: 0,
 
@@ -247,6 +251,8 @@ impl App {
 
             tree: None,
             tree_state: TreeState::default(),
+            needs_tree_fetch: false,
+            pending_session_connect: None,
 
             throbber_state: throbber_widgets_tui::ThrobberState::default(),
 
@@ -326,6 +332,13 @@ impl App {
         self.tree_state = TreeState::default();
     }
 
+    pub fn compact_tree(&self) -> Option<CompactTree> {
+        self.tree.as_ref().map(|t| {
+            let (compact, _warnings) = CompactTree::from_tree_nodes(&t.nodes);
+            compact
+        })
+    }
+
     pub fn push_interaction_log(&mut self, entry: LogEntry) {
         if self.interaction_logs.len() >= self.max_events {
             self.interaction_logs.pop_front();
@@ -333,7 +346,7 @@ impl App {
         self.interaction_logs.push_back(entry);
     }
 
-    pub fn push_flutter_log(&mut self, entry: LogEntry) {
+    pub fn push_flutter_log(&mut self, entry: FlutterLogEntry) {
         if self.flutter_logs.len() >= self.max_events {
             self.flutter_logs.pop_front();
         }
@@ -351,21 +364,18 @@ impl App {
         let source = event.source.to_lowercase();
         let event_type = event.event_type.to_lowercase();
 
+        // Handle session status changes to update app_status
+        if event_type == "session.status_changed" {
+            self.handle_session_status_event(&event.payload);
+            return;
+        }
+
         if source.contains("agent") || event_type.starts_with("agent_") || event_type.contains("tool") {
             self.push_agent_event(event);
         } else if source.contains("flutter") || event_type.starts_with("flutter.") {
             // Flutter logs go to Flutter tab
-            let entry = LogEntry {
-                ts: event.ts.clone(),
-                level: if event_type.contains("error") {
-                    LogLevel::Error
-                } else if event_type.contains("warn") {
-                    LogLevel::Warning
-                } else {
-                    LogLevel::Info
-                },
-                message: extract_flutter_log(&event.payload),
-            };
+            let line = extract_flutter_log(&event.payload);
+            let entry = FlutterLogEntry::parse(&line);
             self.push_flutter_log(entry);
         } else if event_type.contains("interaction") || event_type.contains("tap") || event_type.contains("scroll") {
             // Interaction events (execute_interaction, taps, scrolls)
@@ -376,7 +386,44 @@ impl App {
             };
             self.push_interaction_log(entry);
         }
-        // Note: session-level events are no longer logged separately
+    }
+
+    fn handle_session_status_event(&mut self, payload: &serde_json::Value) {
+        // Check if this event is for our selected session
+        if let Some(session_id) = payload.get("sessionId").and_then(|s| s.as_str()) {
+            if self.selected_session.as_deref() != Some(session_id) {
+                return;
+            }
+        }
+
+        if let Some(status) = payload.get("status").and_then(|s| s.as_str()) {
+            match status {
+                "starting" => self.app_status = AppStatus::Starting,
+                "running" => {
+                    let pid = payload.get("pid").and_then(|p| p.as_u64()).unwrap_or(0) as u32;
+                    let uri = payload
+                        .get("vmServiceUri")
+                        .and_then(|u| u.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    self.app_status = AppStatus::Running { pid, uri };
+                    // Auto-fetch tree when app starts
+                    if self.tree.is_none() {
+                        self.needs_tree_fetch = true;
+                    }
+                }
+                "stopped" | "not_running" => self.app_status = AppStatus::Stopped,
+                "error" => {
+                    let error = payload
+                        .get("error")
+                        .and_then(|e| e.as_str())
+                        .unwrap_or("Unknown error")
+                        .to_string();
+                    self.app_status = AppStatus::Error(error);
+                }
+                _ => {}
+            }
+        }
     }
 
     pub fn filtered_interaction_logs(&self) -> impl Iterator<Item = &LogEntry> {
@@ -390,14 +437,17 @@ impl App {
         })
     }
 
-    pub fn filtered_flutter_logs(&self) -> impl Iterator<Item = &LogEntry> {
+    pub fn filtered_flutter_logs(&self) -> impl Iterator<Item = &FlutterLogEntry> {
         let filter = self.filter.clone();
         self.flutter_logs.iter().filter(move |e| {
+            if e.is_noise() {
+                return false;
+            }
             let Some(ref pattern) = filter else {
                 return true;
             };
             let pattern_lower = pattern.to_lowercase();
-            e.message.to_lowercase().contains(&pattern_lower)
+            e.raw.to_lowercase().contains(&pattern_lower)
         })
     }
 
@@ -440,22 +490,28 @@ impl App {
 
             // Check if this is a session creation response
             if let Some(session) = resp.data.get("session") {
-                if let Ok(parsed) = serde_json::from_value::<Session>(session.clone()) {
-                    let session_id = parsed.id.clone();
-                    // Add to sessions list if not already there
-                    if !self.sessions.iter().any(|s| s.id == session_id) {
-                        self.sessions.push(parsed);
+                match serde_json::from_value::<Session>(session.clone()) {
+                    Ok(parsed) => {
+                        let session_id = parsed.id.clone();
+                        // Add to sessions list if not already there
+                        if !self.sessions.iter().any(|s| s.id == session_id) {
+                            self.sessions.push(parsed);
+                        }
+                        // Auto-select the new session
+                        self.selected_session = Some(session_id);
+                        self.session_picker_index = self.sessions.len().saturating_sub(1);
+                        self.mode = Mode::Normal;
+                        self.push_toast(Toast::success("Session created"));
                     }
-                    // Auto-select the new session
-                    self.selected_session = Some(session_id);
-                    self.session_picker_index = self.sessions.len().saturating_sub(1);
-                    self.mode = Mode::Normal;
-                    self.push_toast(Toast::success("Session created"));
+                    Err(e) => {
+                        tracing::error!(?e, ?session, "Failed to parse session response");
+                        self.push_toast(Toast::error(&format!("Parse error: {}", e)));
+                    }
                 }
                 return;
             }
 
-            // Check for app status
+            // Check for app status from response
             if let Some(status) = resp.data.get("status").and_then(|s| s.as_str()) {
                 match status {
                     "starting" => self.app_status = AppStatus::Starting,
@@ -468,10 +524,17 @@ impl App {
                             .unwrap_or("")
                             .to_string();
                         self.app_status = AppStatus::Running { pid, uri };
+                        // Auto-fetch tree when app starts
+                        if self.tree.is_none() {
+                            self.needs_tree_fetch = true;
+                        }
                     }
                     "stopped" | "not_running" => self.app_status = AppStatus::Stopped,
                     _ => {}
                 }
+            } else if resp.data.get("pid").is_some() {
+                // run_app response returns just { pid } - treat as starting
+                self.app_status = AppStatus::Starting;
             }
         } else if let Some(err) = resp.error {
             self.push_toast(Toast::error(&err));
@@ -552,6 +615,7 @@ impl App {
             ContentTab::Flutter => self.filtered_flutter_logs().count(),
             ContentTab::Agent => self.filtered_agent_events().count(),
             ContentTab::Interactions => self.filtered_interaction_logs().count(),
+            ContentTab::Tree => return, // Tree uses tree_state navigation
         };
         if event_count > 0 && self.scroll_offset < event_count - 1 {
             self.scroll_offset += 1;
@@ -593,6 +657,7 @@ impl App {
         self.sessions = sessions;
         if self.selected_session.is_none() && !self.sessions.is_empty() {
             self.selected_session = Some(self.sessions[0].id.clone());
+            self.update_status_from_session(&self.sessions[0].clone());
         }
     }
 
@@ -609,10 +674,25 @@ impl App {
     }
 
     pub fn session_picker_select(&mut self) {
-        if let Some(session) = self.sessions.get(self.session_picker_index) {
+        if let Some(session) = self.sessions.get(self.session_picker_index).cloned() {
             self.selected_session = Some(session.id.clone());
+            self.update_status_from_session(&session);
         }
         self.mode = Mode::Normal;
+    }
+
+    pub fn update_status_from_session(&mut self, session: &crate::ws::protocol::Session) {
+        match session.app_status.as_str() {
+            "starting" => self.app_status = AppStatus::Starting,
+            "running" => {
+                let pid = session.pid.unwrap_or(0);
+                let uri = session.vm_service_uri.clone().unwrap_or_default();
+                self.app_status = AppStatus::Running { pid, uri };
+            }
+            "stopped" | "not_running" => self.app_status = AppStatus::Stopped,
+            "error" => self.app_status = AppStatus::Error("Unknown error".to_string()),
+            _ => self.app_status = AppStatus::Unknown,
+        }
     }
 
     pub fn next_tab(&mut self) {
@@ -719,9 +799,11 @@ mod tests {
     fn test_content_tab_cycling() {
         assert_eq!(ContentTab::Flutter.next(), ContentTab::Agent);
         assert_eq!(ContentTab::Agent.next(), ContentTab::Interactions);
-        assert_eq!(ContentTab::Interactions.next(), ContentTab::Flutter);
+        assert_eq!(ContentTab::Interactions.next(), ContentTab::Tree);
+        assert_eq!(ContentTab::Tree.next(), ContentTab::Flutter);
 
-        assert_eq!(ContentTab::Flutter.prev(), ContentTab::Interactions);
+        assert_eq!(ContentTab::Flutter.prev(), ContentTab::Tree);
+        assert_eq!(ContentTab::Tree.prev(), ContentTab::Interactions);
         assert_eq!(ContentTab::Agent.prev(), ContentTab::Flutter);
     }
 

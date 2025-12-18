@@ -1466,10 +1466,406 @@ testWidgets('User can log in', (tester) async {
 
 ---
 
-## Open Questions
+## Tree Format v2: Schema-Based Deduplication
 
-1. **Tree Building Strategy**: Build lazily on demand vs eagerly maintain in sync with widget tree?
-2. **Node Lifecycle**: How to handle nodes for widgets that unmount/remount?
+### Motivation
+
+The original tree format repeats full node data for every widget instance. For a `ListView` with 100 identical items, this means 100 copies of the same description, capabilities, and child structure. This wastes tokens and clutters LLM context.
+
+**Goals:**
+1. Deduplicate repeated widget structures
+2. Preserve semantic hierarchy for LLM understanding
+3. Provide concise addressing for interactions
+4. Support both homogeneous (identical) and heterogeneous (mixed) lists
+
+---
+
+### Core Concepts
+
+#### Schema
+A **schema** defines the structure of an `InteractionKey`:
+- `id` - The InteractionKey ID (e.g., `"item"`, `"delete-btn"`)
+- `description` - Human-readable description
+- `widgetType` - Flutter widget type
+- `capabilities` - What the widget can do (`tap`, `type`, `scroll`, etc.)
+- `actions` - Custom actions defined via `InteractableMixin`
+
+**Rule:** Same `InteractionKey` ID = same schema. Descriptions must be consistent (enforced via const constructor or warning on mismatch).
+
+#### Tree
+The **tree** shows where schema instances appear, with:
+- `InteractionContext` nodes providing semantic grouping
+- Instance counts for homogeneous siblings
+- Positional lists for heterogeneous siblings
+- Variant grouping when same ID has different children
+
+---
+
+### Formats
+
+#### 1. Compact JSON (Storage/Wire)
+
+```jsonc
+{
+  "schemas": {
+    "item": {
+      "description": "A list item",
+      "widgetType": "ListTile",
+      "capabilities": ["tap"]
+    },
+    "delete": {
+      "description": "Delete button",
+      "widgetType": "IconButton", 
+      "capabilities": ["tap"]
+    },
+    "edit": {
+      "description": "Edit button",
+      "widgetType": "IconButton",
+      "capabilities": ["tap"]
+    }
+  },
+  "tree": [
+    {
+      "context": "Shopping cart",
+      "children": [
+        { 
+          "id": "item", 
+          "count": 5, 
+          "children": [{ "id": "delete" }] 
+        }
+      ]
+    },
+    {
+      "context": "Settings",
+      "children": [
+        {
+          "id": "item",
+          "variants": [
+            { "count": 3, "children": [{ "id": "delete" }] },
+            { "count": 2, "children": [{ "id": "edit" }] }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+#### 2. Printable Format (LLM-Facing)
+
+```
+[Schemas]
+• item: "A list item" [tap]
+• delete: "Delete button" [tap]
+• edit: "Edit button" [tap]
+
+[Tree]
+Shopping cart
+└── item ×5 → delete
+
+Settings
+└── item
+    ├── (×3) → delete
+    └── (×2) → edit
+```
+
+---
+
+### Node Types
+
+| Type | JSON | Printable | Use Case |
+|------|------|-----------|----------|
+| **Context** | `{ "context": "...", "children": [...] }` | `Name\n└── ...` | Semantic grouping via `InteractionContext` |
+| **Homogeneous** | `{ "id": "...", "count": N, "children": [...] }` | `id ×N → child` | N identical siblings |
+| **Heterogeneous** | `[{ "id": "a" }, { "id": "b" }, { "id": "a" }]` | Positional list | Mixed siblings (preserve order) |
+| **Variants** | `{ "id": "...", "variants": [...] }` | `id\n├── (×N) → child1\n└── (×M) → child2` | Same ID, different children |
+| **Singleton** | `{ "id": "..." }` | `id` | Single instance |
+
+---
+
+### Addressing DSL
+
+Simple path-based syntax for targeting widgets:
+
+```
+item[2]              # 3rd item (0-indexed)
+item[2].delete       # delete button in 3rd item
+item:delete[1]       # 2nd item-with-delete (variant filter)
+item:delete[1].delete # delete button in that item (explicit)
+```
+
+#### Syntax Rules
+
+| Syntax | Meaning |
+|--------|---------|
+| `id` | Select node by InteractionKey ID |
+| `id[n]` | Select nth instance (0-indexed) |
+| `id.child` | Navigate to child node |
+| `id:variant[n]` | Select nth instance of variant (grouped by child structure) |
+
+#### Examples
+
+**Homogeneous:**
+```
+Tree: item ×5 → delete
+
+item[0]         → 1st item
+item[4]         → 5th item  
+item[2].delete  → delete in 3rd item
+```
+
+**Variants:**
+```
+Tree: item
+      ├── (×3) → delete
+      └── (×2) → edit
+
+item:delete[0]        → 1st item-with-delete
+item:delete[2]        → 3rd item-with-delete
+item:edit[1]          → 2nd item-with-edit
+item:delete[0].delete → the delete button itself
+```
+
+**Heterogeneous (positional):**
+```
+Tree: Feed
+      ├── profile
+      ├── ad
+      └── profile
+
+Feed[0]  → 1st child (profile)
+Feed[1]  → 2nd child (ad)
+Feed[2]  → 3rd child (profile)
+```
+
+---
+
+### Deduplication Rules
+
+1. **Schema deduplication:** Same `InteractionKey` ID → one schema entry
+2. **Description consistency:** Same ID must have same description (warn on mismatch, use first)
+3. **Homogeneous collapse:** Identical siblings → `count: N`
+4. **Heterogeneous preserve order:** Mixed siblings → positional array
+5. **Variant grouping:** Same ID with different children → group by child structure
+
+---
+
+### Dart Code Examples
+
+#### Homogeneous List
+```dart
+ListView.builder(
+  itemCount: 100,
+  itemBuilder: (ctx, i) => ListTile(
+    key: InteractionKey('item', description: 'A list item'),
+    trailing: IconButton(
+      key: InteractionKey('delete', description: 'Delete button'),
+      onPressed: () => delete(i),
+    ),
+  ),
+)
+```
+
+**Output:**
+```
+[Schemas]
+• item: "A list item" [tap]
+• delete: "Delete button" [tap]
+
+[Tree]
+└── item ×100 → delete
+```
+
+#### Variant Children
+```dart
+ListView(children: [
+  // Items 0-2: have delete
+  for (var i = 0; i < 3; i++)
+    ListTile(
+      key: InteractionKey('item'),
+      trailing: IconButton(key: InteractionKey('delete'), ...),
+    ),
+  // Items 3-4: have edit
+  for (var i = 0; i < 2; i++)
+    ListTile(
+      key: InteractionKey('item'),
+      trailing: IconButton(key: InteractionKey('edit'), ...),
+    ),
+])
+```
+
+**Output:**
+```
+[Tree]
+└── item
+    ├── (×3) → delete
+    └── (×2) → edit
+```
+
+#### Heterogeneous List
+```dart
+Column(children: [
+  ProfileCard(key: InteractionKey('profile', description: 'User profile')),
+  AdBanner(key: InteractionKey('ad', description: 'Advertisement')),
+  ProfileCard(key: InteractionKey('profile')),
+])
+```
+
+**Output:**
+```
+[Schemas]
+• profile: "User profile" [tap]
+• ad: "Advertisement" [tap]
+
+[Tree]
+├── profile
+├── ad
+└── profile
+```
+
+#### Semantic Context
+```dart
+InteractionContext(
+  description: 'Shopping cart',
+  child: ListView(...),
+)
+```
+
+**Output:**
+```
+[Tree]
+Shopping cart
+└── item ×5 → delete
+```
+
+---
+
+### Implementation Notes
+
+1. **Schema extraction:** During tree building, collect unique InteractionKey IDs and their first-seen descriptions
+2. **Homogeneity detection:** Compare consecutive siblings by ID + child structure fingerprint
+3. **Variant detection:** Same ID with different children → group into variants
+4. **Format conversion:** Daemon converts compact JSON ↔ printable format as needed
+5. **Addressing resolution:** Parse DSL path, expand counts/variants to find target element
+
+---
+
+## TUI Interactive Tree Viewer
+
+### Overview
+
+The TUI provides an interactive way to browse and interact with a Flutter app's interaction tree. This enables:
+1. Visual inspection of the tree structure
+2. Keyboard-driven navigation (Vim-style)
+3. Direct interaction with widgets via capability menus
+4. Real-time tree updates as the Flutter app changes
+
+### Dependencies
+
+- **tui-tree-widget** (MIT) - Tree rendering, already integrated
+- **tui-menu** (MIT) - Popup menus for capability selection
+
+### Keybindings
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | Move down |
+| `k` / `↑` | Move up |
+| `h` / `←` | Collapse node / go to parent |
+| `l` / `→` | Expand node / go to first child |
+| `Enter` | Open capabilities menu for selected node |
+| `Space` | Toggle expand/collapse |
+| `g` | Go to top |
+| `G` | Go to bottom |
+| `/` | Search nodes |
+| `r` | Refresh tree |
+| `Esc` | Close menu / cancel |
+
+### Capabilities Menu
+
+When pressing `Enter` on a node, show a popup menu with available actions:
+
+```
+┌─────────────────────────┐
+│  item[2] - "A list item"│
+├─────────────────────────┤
+│  ▶ tap                  │
+│    longPress            │
+│    ─────────────────    │
+│    delete (action)      │
+│    edit (action)        │
+└─────────────────────────┘
+```
+
+- **Capabilities** (tap, type, scroll, etc.) at top
+- **Separator**
+- **Custom actions** (from `InteractableMixin`) below
+
+Selecting an action sends the interaction to the Flutter app via the daemon.
+
+### Tree Display Format
+
+Use the printable format with visual indicators:
+
+```
+Shopping cart
+├── item ×5 [tap]
+│   └── delete [tap]
+└── checkout [tap]
+    └── confirm-dialog [tap, type]
+```
+
+- Show capabilities in brackets
+- Use tree lines (├── └── │)
+- Highlight selected node
+- Dim collapsed nodes
+
+### State Management
+
+```rust
+pub struct InteractiveTreeState {
+    tree_state: TreeState<String>,  // from tui-tree-widget
+    selected_path: Option<String>,  // DSL path of selected node
+    menu_open: bool,
+    menu_items: Vec<MenuItem>,
+    menu_selected: usize,
+}
+
+pub struct MenuItem {
+    label: String,
+    action_type: ActionType,  // Capability or CustomAction
+    interaction_name: String,
+}
+```
+
+### Interaction Flow
+
+```
+1. User navigates to node with j/k/h/l
+2. User presses Enter
+3. TUI fetches capabilities for selected node
+4. Menu popup appears with available actions
+5. User selects action with j/k + Enter
+6. TUI sends interaction request to daemon
+7. Daemon executes on Flutter app
+8. Tree refreshes to show updated state
+```
+
+### Implementation Tasks
+
+1. [ ] Enhance tree_pane.rs with Vim keybindings
+2. [ ] Add capability display to tree nodes
+3. [ ] Implement popup menu widget (or integrate tui-menu)
+4. [ ] Add interaction execution flow
+5. [ ] Real-time tree updates via WebSocket subscription
+6. [ ] Search/filter functionality
+
+---
+
+## Design Decisions
+
+1. **Tree Building Strategy**: **Lazy** - build on demand when requested, not eagerly maintained
+2. **Node Lifecycle**: Monitor for changes (via Flutter Driver or hot reload hooks), rebuild tree when needed
 3. **Async State**: How to represent loading/error states in the tree?
 4. **Conflict Resolution**: What if multiple widgets have same interactionId?
 5. **Performance**: How to minimize overhead in production builds?

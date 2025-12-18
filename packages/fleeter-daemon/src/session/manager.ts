@@ -5,6 +5,7 @@
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
 import type { Session, SessionInfo, CreateSessionOptions } from './types.js';
+import { MAX_SESSION_LOGS } from './types.js';
 import { AgentExecutor } from '../agent/index.js';
 
 export class SessionManager extends EventEmitter {
@@ -33,6 +34,7 @@ export class SessionManager extends EventEmitter {
       createdAt: now,
       lastActiveAt: now,
       agent: new AgentExecutor(),  // Create agent for this session
+      logs: [],  // Session-level logs persist across reconnects
     };
 
     this.sessions.set(id, session);
@@ -145,6 +147,38 @@ export class SessionManager extends EventEmitter {
     session.lastActiveAt = new Date();
 
     this.emit('session:status_changed', this.toInfo(session));
+  }
+
+  /**
+   * Add a log line to a session. Logs persist across process restarts.
+   */
+  addLog(sessionId: string, line: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    session.logs.push(line);
+    if (session.logs.length > MAX_SESSION_LOGS) {
+      session.logs.shift();
+    }
+  }
+
+  /**
+   * Get logs for a session.
+   */
+  getLogs(sessionId: string, maxLines = 100): string[] {
+    const session = this.sessions.get(sessionId);
+    if (!session) return [];
+    return session.logs.slice(-maxLines);
+  }
+
+  /**
+   * Clear logs for a session.
+   */
+  clearLogs(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      session.logs = [];
+    }
   }
 
   private toInfo(session: Session): SessionInfo {
