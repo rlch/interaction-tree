@@ -1361,4 +1361,87 @@ mod tests {
         assert!(app.filter.is_none());
         assert_eq!(app.scroll_offset, 0);
     }
+
+    #[test]
+    fn test_session_status_event_updates_to_running() {
+        let mut app = app_with_session();
+        
+        // Verify initial state
+        let session = app.current_session().expect("should have session");
+        assert_eq!(session.app_status, "not_running");
+        assert_eq!(session.pid, None);
+        assert_eq!(session.vm_service_uri, None);
+
+        // Simulate session.status_changed event with "starting"
+        let starting_event = MonitoringEvent {
+            ts: "2024-01-01T00:00:01Z".to_string(),
+            source: "session".to_string(),
+            event_type: "session.status_changed".to_string(),
+            payload: serde_json::json!({
+                "sessionId": "test-session-1",
+                "status": "starting"
+            }),
+        };
+        app.push_event(starting_event);
+
+        // Verify status changed to starting
+        let session = app.current_session().expect("should have session");
+        assert_eq!(session.app_status, "starting", "status should be 'starting' after starting event");
+
+        // Simulate session.status_changed event with "running" + pid + vmServiceUri
+        let running_event = MonitoringEvent {
+            ts: "2024-01-01T00:00:02Z".to_string(),
+            source: "session".to_string(),
+            event_type: "session.status_changed".to_string(),
+            payload: serde_json::json!({
+                "sessionId": "test-session-1",
+                "status": "running",
+                "pid": 12345,
+                "vmServiceUri": "ws://127.0.0.1:5678/abc=/ws"
+            }),
+        };
+        app.push_event(running_event);
+
+        // Verify status changed to running with pid and uri
+        let session = app.current_session().expect("should have session");
+        assert_eq!(session.app_status, "running", "status should be 'running' after running event");
+        assert_eq!(session.pid, Some(12345), "pid should be set");
+        assert_eq!(session.vm_service_uri, Some("ws://127.0.0.1:5678/abc=/ws".to_string()), "vmServiceUri should be set");
+    }
+
+    #[test]
+    fn test_session_status_event_for_different_session_still_updates() {
+        let mut app = app_with_session();
+        
+        // Add a second session
+        let mut session2 = test_session();
+        session2.id = "test-session-2".to_string();
+        session2.name = "other".to_string();
+        app.sessions.push(session2);
+
+        // Selected session is still test-session-1
+        assert_eq!(app.selected_session, Some("test-session-1".to_string()));
+
+        // Send status event for session 2 (not selected)
+        let event = MonitoringEvent {
+            ts: "2024-01-01T00:00:01Z".to_string(),
+            source: "session".to_string(),
+            event_type: "session.status_changed".to_string(),
+            payload: serde_json::json!({
+                "sessionId": "test-session-2",
+                "status": "running",
+                "pid": 9999
+            }),
+        };
+        app.push_event(event);
+
+        // Session 2 should be updated even though it's not selected
+        let session2 = app.sessions.iter().find(|s| s.id == "test-session-2").unwrap();
+        assert_eq!(session2.app_status, "running", "non-selected session should still be updated");
+        assert_eq!(session2.pid, Some(9999));
+
+        // Selected session should be unchanged
+        let session1 = app.current_session().unwrap();
+        assert_eq!(session1.app_status, "not_running");
+    }
 }
