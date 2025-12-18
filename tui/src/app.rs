@@ -641,10 +641,13 @@ impl App {
                     self.needs_tree_fetch = true;
                 }
             } else if resp.data.get("pid").is_some() {
-                // run_app response returns just { pid } - treat as starting
+                // run_app response returns { pid, vmServiceUri } - update pid/uri but NOT status
+                // Status is already updated via session.status_changed events
                 if let Some(session) = self.current_session_mut() {
-                    session.app_status = "starting".to_string();
                     session.pid = resp.data.get("pid").and_then(|p| p.as_u64()).map(|p| p as u32);
+                    if let Some(uri) = resp.data.get("vmServiceUri").and_then(|u| u.as_str()) {
+                        session.vm_service_uri = Some(uri.to_string());
+                    }
                 }
             }
         } else if let Some(err) = resp.error {
