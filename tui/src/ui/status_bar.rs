@@ -1,4 +1,4 @@
-use crate::app::{App, AppStatus, WsState};
+use crate::app::{App, WsState};
 use crate::theme::theme;
 use ratatui::{
     layout::{Constraint, Layout, Rect},
@@ -23,59 +23,47 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         ),
     ];
 
-    // Selected session
-    if let Some(ref session_id) = app.selected_session {
-        let session_name = app
-            .sessions
-            .iter()
-            .find(|s| s.id == *session_id)
-            .map(|s| s.name.as_str())
-            .unwrap_or(session_id.as_str());
+    // Selected session - use current_session() as single source of truth
+    if let Some(session) = app.current_session() {
         left_spans.push(sep.clone());
         left_spans.push(Span::styled(
-            format!("@{}", truncate(session_name, 12)),
+            format!("@{}", truncate(&session.name, 12)),
             Style::default().fg(t.source_tree),
         ));
-    }
 
-    // Show VM service URI when running, otherwise show daemon URI
-    match &app.session.app_status {
-        AppStatus::Running { pid, uri } if !uri.is_empty() => {
-            left_spans.push(sep.clone());
-            left_spans.push(Span::styled(
-                format!("pid {} ", pid),
-                Style::default().fg(t.success),
-            ));
-            left_spans.push(Span::styled(uri.clone(), Style::default().fg(t.text_dim)));
+        // Show app status from Session struct (single source of truth)
+        match session.app_status.as_str() {
+            "running" => {
+                let pid = session.pid.unwrap_or(0);
+                let uri = session.vm_service_uri.as_deref().unwrap_or("");
+                left_spans.push(sep.clone());
+                left_spans.push(Span::styled(
+                    format!("pid {} ", pid),
+                    Style::default().fg(t.success),
+                ));
+                if !uri.is_empty() {
+                    left_spans.push(Span::styled(uri.to_string(), Style::default().fg(t.text_dim)));
+                }
+            }
+            "starting" => {
+                left_spans.push(sep.clone());
+                left_spans.push(Span::styled(
+                    "starting…",
+                    Style::default()
+                        .fg(t.warning)
+                        .add_modifier(Modifier::ITALIC),
+                ));
+            }
+            "stopped" | "not_running" => {
+                left_spans.push(sep.clone());
+                left_spans.push(Span::styled("stopped", Style::default().fg(t.error)));
+            }
+            "error" => {
+                left_spans.push(sep.clone());
+                left_spans.push(Span::styled("error", Style::default().fg(t.error)));
+            }
+            _ => {}
         }
-        AppStatus::Starting => {
-            left_spans.push(sep.clone());
-            left_spans.push(Span::styled(
-                "starting…",
-                Style::default()
-                    .fg(t.warning)
-                    .add_modifier(Modifier::ITALIC),
-            ));
-        }
-        AppStatus::Running { pid, .. } => {
-            left_spans.push(sep.clone());
-            left_spans.push(Span::styled(
-                format!("running (pid {})", pid),
-                Style::default().fg(t.success),
-            ));
-        }
-        AppStatus::Stopped => {
-            left_spans.push(sep.clone());
-            left_spans.push(Span::styled("stopped", Style::default().fg(t.error)));
-        }
-        AppStatus::Error(e) => {
-            left_spans.push(sep.clone());
-            left_spans.push(Span::styled(
-                format!("error: {}", truncate(&e, 30)),
-                Style::default().fg(t.error),
-            ));
-        }
-        AppStatus::Unknown => {}
     }
 
 

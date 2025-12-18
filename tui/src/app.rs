@@ -15,7 +15,9 @@ pub struct InteractionTree {
 }
 
 /// Session-specific state that should be reset when switching sessions.
-/// This encapsulates all data that belongs to a particular session.
+/// This encapsulates TUI-only data that belongs to a particular session.
+/// Note: app_status, pid, vmServiceUri are stored in the Session struct (from daemon),
+/// NOT here, to avoid duplicate sources of truth.
 #[derive(Debug, Default)]
 pub struct SessionState {
     pub flutter_logs: VecDeque<FlutterLogEntry>,
@@ -23,7 +25,6 @@ pub struct SessionState {
     pub interaction_logs: VecDeque<LogEntry>,
     pub tree: Option<InteractionTree>,
     pub tree_state: TreeState<String>,
-    pub app_status: AppStatus,
     pub conversation_id: Option<String>,
     pub agent_question: Option<String>,
     pub pending_response: bool,
@@ -39,7 +40,6 @@ impl SessionState {
             interaction_logs: VecDeque::with_capacity(max_events),
             tree: None,
             tree_state: TreeState::default(),
-            app_status: AppStatus::Unknown,
             conversation_id: None,
             agent_question: None,
             pending_response: false,
@@ -54,7 +54,6 @@ impl SessionState {
         self.interaction_logs = VecDeque::with_capacity(max_events);
         self.tree = None;
         self.tree_state = TreeState::default();
-        self.app_status = AppStatus::Unknown;
         self.conversation_id = None;
         self.agent_question = None;
         self.pending_response = false;
@@ -78,21 +77,6 @@ pub enum WsState {
     Disconnected,
     Connecting,
     Connected,
-}
-
-#[derive(Debug, Clone, Default)]
-pub enum AppStatus {
-    #[default]
-    Unknown,
-    Starting,
-    Running {
-        pid: u32,
-        #[allow(dead_code)]
-        uri: String,
-    },
-    Stopped,
-    #[allow(dead_code)]
-    Error(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -304,6 +288,18 @@ impl App {
         self.toasts.retain(|t| !t.is_expired(self.toast_ttl_secs));
     }
 
+    /// Get the currently selected session (single source of truth for session state)
+    pub fn current_session(&self) -> Option<&Session> {
+        self.selected_session.as_ref()
+            .and_then(|id| self.sessions.iter().find(|s| s.id == *id))
+    }
+
+    /// Get the currently selected session mutably
+    pub fn current_session_mut(&mut self) -> Option<&mut Session> {
+        let selected_id = self.selected_session.clone();
+        selected_id.and_then(move |id| self.sessions.iter_mut().find(|s| s.id == id))
+    }
+
     // Completion methods - currently unused, hotkey-driven UI instead
     /*
     pub fn update_completions(&mut self) {
@@ -410,7 +406,7 @@ impl App {
                 // Clear selected session if it was destroyed
                 if self.selected_session.as_deref() == Some(session_id) {
                     self.selected_session = None;
-                    self.session.app_status = AppStatus::Stopped;
+                    self.reset_session_state();
                 }
             }
             return;
@@ -479,44 +475,26 @@ impl App {
            }
        }
 
-       if let Some(status) = status {
-           tracing::info!(status = status, "Updating app_status");
-            
-            // Update local SessionState
-            match status {
-                "starting" => self.session.app_status = AppStatus::Starting,
-                "running" => {
-                     let pid = payload.get("pid").and_then(|p| p.as_u64()).unwrap_or(0) as u32;
-                     let uri = payload
-                         .get("vmServiceUri")
-                         .and_then(|u| u.as_str())
-                         .unwrap_or("")
-                         .to_string();
-                     self.session.app_status = AppStatus::Running { pid, uri };
-                     // Auto-fetch tree when app starts
-                     if self.session.tree.is_none() {
-                         self.needs_tree_fetch = true;
-                     }
-                 }
-                 "stopped" | "not_running" => self.session.app_status = AppStatus::Stopped,
-                 "error" => {
-                     let error = payload
-                         .get("error")
-                         .and_then(|e| e.as_str())
-                         .unwrap_or("Unknown error")
-                         .to_string();
-                     self.session.app_status = AppStatus::Error(error);
-                 }
-                 _ => {}
-             }
-            
-            // Also update the Session in the sessions list (for session picker display)
-            if let Some(session_id) = event_session_id {
-                if let Some(session) = self.sessions.iter_mut().find(|s| s.id == session_id) {
-                    session.app_status = status.to_string();
-                }
-            }
-         }
+       // Update the Session in the sessions list (single source of truth)
+       if let Some(session_id) = event_session_id {
+           if let Some(session) = self.sessions.iter_mut().find(|s| s.id == session_id) {
+               if let Some(status) = status {
+                   tracing::info!(status = status, "Updating session.app_status");
+                   session.app_status = status.to_string();
+               }
+               if let Some(pid) = payload.get("pid").and_then(|p| p.as_u64()) {
+                   session.pid = Some(pid as u32);
+               }
+               if let Some(uri) = payload.get("vmServiceUri").and_then(|u| u.as_str()) {
+                   session.vm_service_uri = Some(uri.to_string());
+               }
+               
+               // Auto-fetch tree when app starts running
+               if status == Some("running") && self.session.tree.is_none() {
+                   self.needs_tree_fetch = true;
+               }
+           }
+       }
        }
 
     pub fn filtered_interaction_logs(&self) -> impl Iterator<Item = &LogEntry> {
@@ -604,30 +582,25 @@ impl App {
                 return;
             }
 
-            // Check for app status from response
+            // Check for app status from response - update Session in sessions list
             if let Some(status) = resp.data.get("status").and_then(|s| s.as_str()) {
-                match status {
-                    "starting" => self.session.app_status = AppStatus::Starting,
-                    "running" => {
-                        let pid = resp.data.get("pid").and_then(|p| p.as_u64()).unwrap_or(0) as u32;
-                        let uri = resp
-                            .data
-                            .get("uri")
-                            .and_then(|u| u.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        self.session.app_status = AppStatus::Running { pid, uri };
-                        // Auto-fetch tree when app starts
-                        if self.session.tree.is_none() {
-                            self.needs_tree_fetch = true;
-                        }
+                if let Some(session) = self.current_session_mut() {
+                    session.app_status = status.to_string();
+                    if status == "running" {
+                        session.pid = resp.data.get("pid").and_then(|p| p.as_u64()).map(|p| p as u32);
+                        session.vm_service_uri = resp.data.get("uri").and_then(|u| u.as_str()).map(String::from);
                     }
-                    "stopped" | "not_running" => self.session.app_status = AppStatus::Stopped,
-                    _ => {}
+                }
+                // Auto-fetch tree when app starts running
+                if status == "running" && self.session.tree.is_none() {
+                    self.needs_tree_fetch = true;
                 }
             } else if resp.data.get("pid").is_some() {
                 // run_app response returns just { pid } - treat as starting
-                self.session.app_status = AppStatus::Starting;
+                if let Some(session) = self.current_session_mut() {
+                    session.app_status = "starting".to_string();
+                    session.pid = resp.data.get("pid").and_then(|p| p.as_u64()).map(|p| p as u32);
+                }
             }
         } else if let Some(err) = resp.error {
             self.push_toast(Toast::error(&err));
@@ -687,7 +660,9 @@ impl App {
     }
 
     pub fn is_app_running(&self) -> bool {
-        matches!(self.session.app_status, AppStatus::Running { .. } | AppStatus::Starting)
+        self.current_session()
+            .map(|s| matches!(s.app_status.as_str(), "running" | "starting"))
+            .unwrap_or(false)
     }
 
     pub fn has_session(&self) -> bool {
@@ -750,7 +725,6 @@ impl App {
         self.sessions = sessions;
         if self.selected_session.is_none() && !self.sessions.is_empty() {
             self.selected_session = Some(self.sessions[0].id.clone());
-            self.update_status_from_session(&self.sessions[0].clone());
         }
     }
 
@@ -782,23 +756,8 @@ impl App {
         // Switching to a different session - reset all session state
         self.reset_session_state();
         self.selected_session = Some(session.id.clone());
-        self.update_status_from_session(&session);
         self.mode = Mode::Normal;
         true
-    }
-
-    pub fn update_status_from_session(&mut self, session: &crate::ws::protocol::Session) {
-        match session.app_status.as_str() {
-            "starting" => self.session.app_status = AppStatus::Starting,
-            "running" => {
-                let pid = session.pid.unwrap_or(0);
-                let uri = session.vm_service_uri.clone().unwrap_or_default();
-                self.session.app_status = AppStatus::Running { pid, uri };
-            }
-            "stopped" | "not_running" => self.session.app_status = AppStatus::Stopped,
-            "error" => self.session.app_status = AppStatus::Error("Unknown error".to_string()),
-            _ => self.session.app_status = AppStatus::Unknown,
-        }
     }
 
     pub fn next_tab(&mut self) {
@@ -875,6 +834,28 @@ mod tests {
         }
     }
 
+    fn test_session() -> Session {
+        Session {
+            id: "test-session-1".to_string(),
+            name: "test".to_string(),
+            project_path: "/test/project".to_string(),
+            app_status: "not_running".to_string(),
+            vm_service_uri: None,
+            pid: None,
+            connected_clients: vec![],
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            last_active_at: "2024-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    fn app_with_session() -> App {
+        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
+        app.sessions.push(test_session());
+        app.selected_session = Some("test-session-1".to_string());
+        app.mode = Mode::Normal;
+        app
+    }
+
     #[test]
     fn test_new_app() {
         let app = App::new("ws://localhost:9000".to_string(), 100, test_project());
@@ -928,7 +909,7 @@ mod tests {
 
     #[test]
     fn test_handle_command_response_running() {
-        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
+        let mut app = app_with_session();
         let resp = CommandResponse {
             id: "1".to_string(),
             success: true,
@@ -937,13 +918,10 @@ mod tests {
         };
 
         app.handle_command_response(resp);
-        match app.session.app_status {
-            AppStatus::Running { pid, uri } => {
-                assert_eq!(pid, 1234);
-                assert_eq!(uri, "ws://127.0.0.1:5678");
-            }
-            _ => panic!("Expected Running status"),
-        }
+        let session = app.current_session().expect("should have session");
+        assert_eq!(session.app_status, "running");
+        assert_eq!(session.pid, Some(1234));
+        assert_eq!(session.vm_service_uri.as_deref(), Some("ws://127.0.0.1:5678"));
     }
 
     #[test]
@@ -1357,11 +1335,7 @@ mod tests {
     fn test_reset_session_state_clears_all() {
         let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
 
-        // Set up various session state
-        app.session.app_status = AppStatus::Running {
-            pid: 1234,
-            uri: "ws://test".to_string(),
-        };
+        // Set up various TUI-local session state (app_status now lives in Session struct)
         app.push_flutter_log(crate::flutter_log::FlutterLogEntry::parse("Log"));
         app.push_agent_event(MonitoringEvent {
             ts: "2024-01-01T00:00:00Z".to_string(),
@@ -1377,8 +1351,7 @@ mod tests {
         // Reset
         app.reset_session_state();
 
-        // Verify everything is cleared
-        assert!(matches!(app.session.app_status, AppStatus::Unknown));
+        // Verify TUI-local state is cleared
         assert!(app.session.flutter_logs.is_empty());
         assert!(app.session.agent_events.is_empty());
         assert!(app.session.interaction_logs.is_empty());
