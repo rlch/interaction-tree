@@ -61,7 +61,6 @@ async function main() {
     <key>ProgramArguments</key>
     <array>
         <string>${bunPath}</string>
-        <string>run</string>
         <string>${daemonScript}</string>
     </array>
     <key>RunAtLoad</key>

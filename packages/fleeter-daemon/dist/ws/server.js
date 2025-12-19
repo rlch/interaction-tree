@@ -485,6 +485,7 @@ export class DaemonServer {
                         // Store assistant text immediately when task completes (not after execute returns)
                         // This ensures chat history is persisted even if TUI disconnects
                         if (evt.kind === "task_complete") {
+                            log.agent.info({ hasText: !!textBuffer.trim(), textLen: textBuffer.length }, 'task_complete event');
                             if (textBuffer.trim()) {
                                 this.sessionManager.addChatMessage(sessionId, {
                                     role: "assistant",
@@ -515,7 +516,9 @@ export class DaemonServer {
                         });
                         log.agent.info({ sessionId, status: result.status }, 'Agent execute completed');
                         // Store final assistant text only if not already saved on task_complete
+                        log.agent.info({ hasText: !!textBuffer.trim(), textLen: textBuffer.length }, 'after execute() - checking textBuffer');
                         if (textBuffer.trim()) {
+                            log.agent.warn({ textLen: textBuffer.length }, 'SAVING TEXT AFTER EXECUTE - should not happen!');
                             this.sessionManager.addChatMessage(sessionId, {
                                 role: 'assistant',
                                 content: { type: 'text', text: textBuffer.trim() },

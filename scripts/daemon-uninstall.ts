@@ -26,6 +26,12 @@ async function main() {
     console.log('⚠ Service may not have been running');
   }
 
+  // Force kill any remaining daemon processes
+  const pkillResult = spawnSync('pkill', ['-f', 'fleeter-daemon/dist/bin/daemon.js'], { stdio: 'inherit' });
+  if (pkillResult.status === 0) {
+    console.log('✓ Killed remaining daemon process');
+  }
+
   unlinkSync(PLIST_PATH);
   console.log(`✓ Removed ${PLIST_PATH}`);
   console.log('\nFleeter daemon service uninstalled.');
