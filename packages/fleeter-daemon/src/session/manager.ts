@@ -220,7 +220,7 @@ export class SessionManager extends EventEmitter {
     }
   }
 
-  private toInfo(session: Session): SessionInfo {
+  toInfo(session: Session): SessionInfo {
     return {
       id: session.id,
       name: session.name,

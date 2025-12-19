@@ -409,11 +409,14 @@ impl App {
                         
                         // Load chat history if present (for reconnecting to existing session)
                         if let Some(chat_history) = resp.data.get("chatHistory") {
+                            tracing::debug!(?chat_history, "Raw chatHistory from daemon");
                             let messages = crate::chat::parse_chat_history(chat_history);
+                            tracing::info!(count = messages.len(), roles = ?messages.iter().map(|m| &m.role).collect::<Vec<_>>(), "Parsed chat messages");
                             if !messages.is_empty() {
-                                tracing::info!("Loaded {} chat messages from session", messages.len());
                                 self.session.chat_messages = messages;
                             }
+                        } else {
+                            tracing::warn!("No chatHistory in connect_session response");
                         }
                         
                         self.push_toast(Toast::success("Session connected"));

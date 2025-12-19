@@ -6,6 +6,15 @@
  */
 import type { VMServiceClient } from '../vm/client.js';
 import type { AgentStreamEvent } from '../ws/protocol.js';
+import type { SessionManager } from '../session/manager.js';
+import type { FlutterProcessManager } from '../flutter/process-manager.js';
+/** Context passed to the agent's MCP tools */
+export interface AgentContext {
+    vmClient?: VMServiceClient;
+    sessionManager?: SessionManager;
+    flutterManager?: FlutterProcessManager;
+    sessionId?: string;
+}
 export declare const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
 export interface AgentConfig {
     /** Model to use (defaults to claude-haiku-4-5-20251001) */
@@ -36,10 +45,10 @@ export interface AgentExecutionResult {
 }
 export type AgentStreamCallback = (event: Omit<AgentStreamEvent, 'type' | 'id' | 'sessionId'>) => void;
 /**
- * Execute an agent with the interaction tree tools bound to a specific VMClient.
- * VMClient is optional - the agent can still respond but app-specific tools will fail gracefully.
+ * Execute an agent with the interaction tree tools bound to a context.
+ * Context includes VMClient, SessionManager, FlutterManager - all optional.
  */
-export declare function executeAgent(systemPrompt: string, userMessage: string, config: AgentExecutorConfig, vmClient?: VMServiceClient, onEvent?: AgentStreamCallback): Promise<AgentExecutionResult>;
+export declare function executeAgent(systemPrompt: string, userMessage: string, config: AgentExecutorConfig, ctx: AgentContext, onEvent?: AgentStreamCallback): Promise<AgentExecutionResult>;
 /**
  * Get the default agent config.
  */
@@ -60,6 +69,8 @@ export declare class AgentExecutor {
     execute(options: {
         intent: string;
         vmClient?: VMServiceClient;
+        sessionManager?: SessionManager;
+        flutterManager?: FlutterProcessManager;
         sessionId: string;
         cwd: string;
         onEvent?: AgentStreamCallback;

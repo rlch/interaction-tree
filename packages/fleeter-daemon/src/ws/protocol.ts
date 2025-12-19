@@ -48,9 +48,12 @@ export type CommandAction =
   | 'hot_restart'
   // Interaction tree
   | 'get_tree'
+  | 'get_state'
   | 'execute_interaction'
-  // Logs
+  | 'batch'
+  // Logs & Errors
   | 'get_logs'
+  | 'get_errors'
   // Agent
   | 'agent_message'
   // Status

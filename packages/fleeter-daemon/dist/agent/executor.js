@@ -26,11 +26,15 @@ function parseAskContext(content) {
 }
 /**
  * Create the interaction tree MCP server for the agent.
- * Takes VMClient as optional parameter - tools will return helpful errors if not connected.
+ * Takes context with optional VMClient, SessionManager, FlutterManager.
  */
-function createInteractionTreeMcpServer(vmClient) {
+function createInteractionTreeMcpServer(ctx) {
+    const { vmClient, sessionManager, flutterManager, sessionId } = ctx;
     const notConnectedError = {
-        content: [{ type: 'text', text: 'Error: No Flutter app connected. Start an app first with run_app or wait for it to connect.' }],
+        content: [{ type: 'text', text: 'Error: No Flutter app connected. Use run_app to start the app first.' }],
+    };
+    const noSessionError = {
+        content: [{ type: 'text', text: 'Error: No session context available.' }],
     };
     const getStatusTool = tool('getStatus', 'Get the current connection status.', {}, async () => {
         if (!vmClient) {
@@ -193,28 +197,156 @@ function createInteractionTreeMcpServer(vmClient) {
             };
         }
     });
+    // Session management tools
+    const createSessionTool = tool('createSession', 'Create a new Flutter session.', {
+        name: z.string().describe('Session name'),
+        projectPath: z.string().describe('Path to Flutter project'),
+    }, async (args) => {
+        if (!sessionManager) {
+            return noSessionError;
+        }
+        try {
+            const session = sessionManager.create({ name: args.name, projectPath: args.projectPath });
+            return {
+                content: [{ type: 'text', text: JSON.stringify(session, null, 2) }],
+            };
+        }
+        catch (err) {
+            return {
+                content: [{ type: 'text', text: `Error creating session: ${err instanceof Error ? err.message : String(err)}` }],
+            };
+        }
+    });
+    const listSessionsTool = tool('listSessions', 'List all Flutter sessions.', {}, async () => {
+        if (!sessionManager) {
+            return noSessionError;
+        }
+        const sessions = sessionManager.list();
+        return {
+            content: [{ type: 'text', text: JSON.stringify(sessions, null, 2) }],
+        };
+    });
+    const connectSessionTool = tool('connectSession', 'Connect to an existing session by name or ID.', {
+        sessionId: z.string().describe('Session ID or name'),
+    }, async (args) => {
+        if (!sessionManager) {
+            return noSessionError;
+        }
+        const session = sessionManager.get(args.sessionId);
+        if (!session) {
+            return {
+                content: [{ type: 'text', text: `Error: Session not found: ${args.sessionId}` }],
+            };
+        }
+        return {
+            content: [{ type: 'text', text: JSON.stringify({ connected: true, session: sessionManager.toInfo(session) }, null, 2) }],
+        };
+    });
+    const destroySessionTool = tool('destroySession', 'Destroy a session by name or ID.', {
+        sessionId: z.string().describe('Session ID or name'),
+    }, async (args) => {
+        if (!sessionManager) {
+            return noSessionError;
+        }
+        try {
+            await sessionManager.destroy(args.sessionId);
+            return {
+                content: [{ type: 'text', text: JSON.stringify({ destroyed: true }, null, 2) }],
+            };
+        }
+        catch (err) {
+            return {
+                content: [{ type: 'text', text: `Error destroying session: ${err instanceof Error ? err.message : String(err)}` }],
+            };
+        }
+    });
+    // App lifecycle tools
+    const runAppTool = tool('runApp', 'Run the Flutter app in the current session.', {
+        device: z.string().optional().describe('Target device'),
+        flavor: z.string().optional().describe('Build flavor'),
+        target: z.string().optional().describe('Target file (e.g., lib/main.dart)'),
+    }, async (args) => {
+        if (!sessionManager || !flutterManager || !sessionId) {
+            return noSessionError;
+        }
+        const session = sessionManager.get(sessionId);
+        if (!session) {
+            return {
+                content: [{ type: 'text', text: `Error: Session not found: ${sessionId}` }],
+            };
+        }
+        try {
+            sessionManager.updateStatus(sessionId, 'starting');
+            const flutterProcess = await flutterManager.runApp(sessionId, session.projectPath, {
+                device: args.device,
+                flavor: args.flavor,
+                target: args.target,
+            });
+            sessionManager.updateStatus(sessionId, 'running', { pid: flutterProcess.pid });
+            return {
+                content: [{ type: 'text', text: JSON.stringify({ success: true, pid: flutterProcess.pid }, null, 2) }],
+            };
+        }
+        catch (err) {
+            sessionManager.updateStatus(sessionId, 'not_running');
+            return {
+                content: [{ type: 'text', text: `Error running app: ${err instanceof Error ? err.message : String(err)}` }],
+            };
+        }
+    });
+    const stopAppTool = tool('stopApp', 'Stop the Flutter app in the current session.', {}, async () => {
+        if (!flutterManager || !sessionId) {
+            return noSessionError;
+        }
+        try {
+            await flutterManager.stopApp(sessionId);
+            if (sessionManager) {
+                sessionManager.updateStatus(sessionId, 'not_running');
+            }
+            return {
+                content: [{ type: 'text', text: JSON.stringify({ success: true }, null, 2) }],
+            };
+        }
+        catch (err) {
+            return {
+                content: [{ type: 'text', text: `Error stopping app: ${err instanceof Error ? err.message : String(err)}` }],
+            };
+        }
+    });
     return createSdkMcpServer({
         name: 'interaction-tree',
         version: '0.1.0',
         tools: [
+            // Status & tree
             getStatusTool,
             getTreeTool,
+            // Interactions
             executeTool,
             getStateTool,
             batchTool,
+            // Hot reload/restart
             hotReloadTool,
             hotRestartTool,
+            // Logs & errors
             getLogsTool,
             getErrorsTool,
+            // Session management
+            createSessionTool,
+            listSessionsTool,
+            connectSessionTool,
+            destroySessionTool,
+            // App lifecycle
+            runAppTool,
+            stopAppTool,
         ],
     });
 }
 /**
- * Execute an agent with the interaction tree tools bound to a specific VMClient.
- * VMClient is optional - the agent can still respond but app-specific tools will fail gracefully.
+ * Execute an agent with the interaction tree tools bound to a context.
+ * Context includes VMClient, SessionManager, FlutterManager - all optional.
  */
-export async function executeAgent(systemPrompt, userMessage, config, vmClient, onEvent) {
-    const mcpServer = createInteractionTreeMcpServer(vmClient);
+export async function executeAgent(systemPrompt, userMessage, config, ctx, onEvent) {
+    const mcpServer = createInteractionTreeMcpServer(ctx);
     const options = {
         cwd: config.cwd,
         maxTurns: config.maxTurns,
@@ -223,15 +355,27 @@ export async function executeAgent(systemPrompt, userMessage, config, vmClient, 
             'interaction-tree': mcpServer,
         },
         allowedTools: [
+            // Status & tree
             'mcp__interaction-tree__getStatus',
             'mcp__interaction-tree__getTree',
+            // Interactions
             'mcp__interaction-tree__execute',
             'mcp__interaction-tree__getState',
             'mcp__interaction-tree__batch',
+            // Hot reload/restart
             'mcp__interaction-tree__hotReload',
             'mcp__interaction-tree__hotRestart',
+            // Logs & errors
             'mcp__interaction-tree__getLogs',
             'mcp__interaction-tree__getErrors',
+            // Session management
+            'mcp__interaction-tree__createSession',
+            'mcp__interaction-tree__listSessions',
+            'mcp__interaction-tree__connectSession',
+            'mcp__interaction-tree__destroySession',
+            // App lifecycle
+            'mcp__interaction-tree__runApp',
+            'mcp__interaction-tree__stopApp',
         ],
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
@@ -347,15 +491,20 @@ export class AgentExecutor {
         this.sdkSessionId = undefined;
     }
     async execute(options) {
-        const { intent, vmClient, cwd, onEvent } = options;
+        const { intent, vmClient, sessionManager, flutterManager, sessionId, cwd, onEvent } = options;
         const { AGENT_SYSTEM_PROMPT } = await import('./prompts.js');
         const config = getDefaultAgentConfig(cwd, this.config);
         // Resume existing session if we have one
         if (this.sdkSessionId) {
             config.resume = this.sdkSessionId;
         }
-        // vmClient may be undefined - the MCP tools handle this gracefully
-        const result = await executeAgent(AGENT_SYSTEM_PROMPT, intent, config, vmClient, onEvent);
+        const ctx = {
+            vmClient,
+            sessionManager,
+            flutterManager,
+            sessionId,
+        };
+        const result = await executeAgent(AGENT_SYSTEM_PROMPT, intent, config, ctx, onEvent);
         // Store the session ID for future resumption
         if (result.sessionId) {
             this.sdkSessionId = result.sessionId;

@@ -69,6 +69,6 @@ export declare class SessionManager extends EventEmitter {
      * Clear chat history for a session.
      */
     clearChatHistory(sessionId: string): void;
-    private toInfo;
+    toInfo(session: Session): SessionInfo;
 }
 //# sourceMappingURL=manager.d.ts.map

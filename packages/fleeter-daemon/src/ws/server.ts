@@ -17,7 +17,7 @@ import type {
 import { isClientHello, isCommandMessage, isAgentToolCall } from './protocol.js';
 import type { SessionManager } from '../session/index.js';
 import type { FlutterProcessManager } from '../flutter/index.js';
-import type { VMServiceClient } from '../vm/index.js';
+import type { VMServiceClient, BatchStep } from '../vm/index.js';
 import { log } from '../logger.js';
 
 const DAEMON_VERSION = '0.1.0';
@@ -196,6 +196,7 @@ export class DaemonServer {
           
           // Send chat history to the connecting client
           const chatHistory = this.sessionManager.getChatHistory(sessionId);
+          log.ws.info({ sessionId, chatHistoryCount: chatHistory.length, roles: chatHistory.map(m => m.role) }, 'Sending chat history on connect');
 
           sendResponse({ success: true, data: { session, chatHistory } });
           break;
@@ -372,6 +373,89 @@ export class DaemonServer {
           break;
         }
 
+        case 'get_state': {
+          const clientEntry = this.clients.get(clientId);
+          const sessionId = clientEntry?.client.currentSessionId;
+          if (!sessionId) {
+            sendResponse({ success: false, error: NO_SESSION_ERROR });
+            return;
+          }
+          const vmClient = this.vmClients.get(sessionId);
+          if (!vmClient?.isConnected) {
+            sendResponse({ success: false, error: 'VM client not connected' });
+            return;
+          }
+          const { nodeId } = data as { nodeId: string };
+          if (!nodeId) {
+            sendResponse({ success: false, error: 'nodeId is required' });
+            return;
+          }
+          try {
+            const state = await vmClient.getState(nodeId);
+            sendResponse({ success: true, data: { state } });
+          } catch (err) {
+            sendResponse({
+              success: false,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+          break;
+        }
+
+        case 'batch': {
+          const clientEntry = this.clients.get(clientId);
+          const sessionId = clientEntry?.client.currentSessionId;
+          if (!sessionId) {
+            sendResponse({ success: false, error: NO_SESSION_ERROR });
+            return;
+          }
+          const vmClient = this.vmClients.get(sessionId);
+          if (!vmClient?.isConnected) {
+            sendResponse({ success: false, error: 'VM client not connected' });
+            return;
+          }
+          const { steps } = data as { steps: BatchStep[] };
+          if (!steps || !Array.isArray(steps)) {
+            sendResponse({ success: false, error: 'steps array is required' });
+            return;
+          }
+          try {
+            const result = await vmClient.batch(steps);
+            sendResponse({ success: true, data: result });
+          } catch (err) {
+            sendResponse({
+              success: false,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+          break;
+        }
+
+        case 'get_errors': {
+          const clientEntry = this.clients.get(clientId);
+          const sessionId = clientEntry?.client.currentSessionId;
+          if (!sessionId) {
+            sendResponse({ success: false, error: NO_SESSION_ERROR });
+            return;
+          }
+          const vmClient = this.vmClients.get(sessionId);
+          if (!vmClient?.isConnected) {
+            sendResponse({ success: false, error: 'VM client not connected' });
+            return;
+          }
+          const { clear } = data as { clear?: boolean } | undefined ?? {};
+          try {
+            const errors = await vmClient.getRuntimeErrors(clear);
+            sendResponse({ success: true, data: { errors } });
+          } catch (err) {
+            sendResponse({
+              success: false,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+          break;
+        }
+
         case 'agent_message': {
           log.agent.debug({ clientId }, 'Received agent_message');
           const clientEntry = this.clients.get(clientId);
@@ -443,6 +527,19 @@ export class DaemonServer {
               }
             }
 
+            // Store assistant text immediately when task completes (not after execute returns)
+            // This ensures chat history is persisted even if TUI disconnects
+            if (evt.kind === "task_complete") {
+              if (textBuffer.trim()) {
+                this.sessionManager.addChatMessage(sessionId, {
+                  role: "assistant",
+                  content: { type: "text", text: textBuffer.trim() },
+                  timestamp: new Date().toISOString(),
+                });
+                textBuffer = "";  // Clear so we dont double-save after execute()
+              }
+            }
+
             const streamEvent: AgentStreamEvent = {
               type: 'agent_stream',
               id,
@@ -459,6 +556,8 @@ export class DaemonServer {
             const result = await session.agent.execute({
               intent,
               vmClient,
+              sessionManager: this.sessionManager,
+              flutterManager: this.flutterManager,
               sessionId,
               cwd: session.projectPath,
               onEvent,

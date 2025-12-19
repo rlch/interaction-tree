@@ -152,6 +152,7 @@ export class DaemonServer {
                     }
                     // Send chat history to the connecting client
                     const chatHistory = this.sessionManager.getChatHistory(sessionId);
+                    log.ws.info({ sessionId, chatHistoryCount: chatHistory.length, roles: chatHistory.map(m => m.role) }, 'Sending chat history on connect');
                     sendResponse({ success: true, data: { session, chatHistory } });
                     break;
                 }
@@ -390,6 +391,8 @@ export class DaemonServer {
                         const result = await session.agent.execute({
                             intent,
                             vmClient,
+                            sessionManager: this.sessionManager,
+                            flutterManager: this.flutterManager,
                             sessionId,
                             cwd: session.projectPath,
                             onEvent,
