@@ -4,7 +4,6 @@ use crate::theme::theme;
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::Style,
-    text::Line,
     widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
     Frame,
 };
@@ -49,31 +48,6 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     };
 
-    // Build lines with cursor highlighting
-    let lines: Vec<Line> = logs
-        .iter()
-        .enumerate()
-        .skip(visible_start)
-        .take(inner_height)
-        .map(|(idx, e)| {
-            let line = e.to_line();
-
-            // Highlight cursor line (style on Line fills full width)
-            if idx == cursor {
-                let bg_color = if mode == LogViewMode::Visual && is_selected(idx) {
-                    t.selection_bg
-                } else {
-                    t.cursor_bg
-                };
-                line.style(Style::default().bg(bg_color))
-            } else if is_selected(idx) {
-                line.style(Style::default().bg(t.selection_bg))
-            } else {
-                line
-            }
-        })
-        .collect();
-
     // Build title with mode indicator
     let mode_indicator = match mode {
         LogViewMode::Normal => "",
@@ -103,8 +77,51 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
 
     frame.render_widget(block, area);
 
-    let paragraph = Paragraph::new(lines);
-    frame.render_widget(paragraph, chunks[0]);
+    let content_area = chunks[0];
+
+    // Render each line manually with full-width background for highlighted lines
+    for (row, (idx, entry)) in logs
+        .iter()
+        .enumerate()
+        .skip(visible_start)
+        .take(inner_height)
+        .enumerate()
+    {
+        let line_area = Rect {
+            x: content_area.x,
+            y: content_area.y + row as u16,
+            width: content_area.width,
+            height: 1,
+        };
+
+        let is_cursor_line = idx == cursor;
+        let is_selected_line = is_selected(idx);
+
+        // Determine background color
+        let bg_style = if is_cursor_line {
+            if mode == LogViewMode::Visual && is_selected_line {
+                Some(Style::default().bg(t.selection_bg))
+            } else {
+                Some(Style::default().bg(t.cursor_bg))
+            }
+        } else if is_selected_line {
+            Some(Style::default().bg(t.selection_bg))
+        } else {
+            None
+        };
+
+        // Fill full line with background first if highlighted
+        if let Some(style) = bg_style {
+            let buf = frame.buffer_mut();
+            for x in line_area.x..line_area.x + line_area.width {
+                buf[(x, line_area.y)].set_style(style);
+            }
+        }
+
+        // Render the line content on top
+        let line = entry.to_line();
+        frame.render_widget(Paragraph::new(line), line_area);
+    }
 
     // Render scrollbar
     if log_count > inner_height {
