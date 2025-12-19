@@ -50,14 +50,15 @@ See [DAEMON_DESIGN.md](./DAEMON_DESIGN.md) for full architecture documentation.
 ## Commands
 
 ```bash
-# Build & install
+# Build & install (ALWAYS restart daemon after building daemon changes)
 bun install
 bun run build
+bun run daemon:restart      # Required after daemon code changes
 
 # Daemon (launchd service)
 bun run daemon:install      # Install & start
 bun run daemon:uninstall    # Stop & remove
-bun run daemon:restart      # Reinstall
+bun run daemon:restart      # Reinstall (use after code changes)
 bun run daemon:status       # Check status
 
 # Logs (~/.fleeter/logs/)
