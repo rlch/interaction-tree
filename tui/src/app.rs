@@ -135,6 +135,9 @@ impl App {
         
         // Set the new session
         self.selected_session = Some(new_session_id);
+        
+        // Always fetch tree when switching sessions (it may be stale or missing)
+        self.needs_tree_fetch = true;
     }
 
     // Completion methods - currently unused, hotkey-driven UI instead
@@ -398,7 +401,7 @@ impl App {
 
     pub fn handle_command_response(&mut self, resp: CommandResponse) {
         if resp.success {
-            // Check if this is a tree response
+            // Check if this is a tree response (from get_tree)
             if let Some(targets) = resp.data.get("targets").and_then(|t| t.as_array()) {
                 let nodes = Self::parse_tree_nodes(targets);
                 let tree = InteractionTree {
@@ -407,6 +410,17 @@ impl App {
                 };
                 self.set_tree(tree);
                 return;
+            }
+
+            // Check if response contains updated tree (from execute_interaction, batch)
+            if let Some(tree_data) = resp.data.get("tree").and_then(|t| t.as_array()) {
+                let nodes = Self::parse_tree_nodes(tree_data);
+                let tree = InteractionTree {
+                    nodes,
+                    last_updated: Some(chrono::Utc::now().to_rfc3339()),
+                };
+                self.set_tree(tree);
+                // Don't return - continue processing other fields
             }
 
             // Check if this is a sessions list response
@@ -556,6 +570,8 @@ impl App {
                 self.session.conversation_id = None;
                 self.session.agent_question = None;
                 self.session.last_agent_error = None;
+                // Refresh tree after agent completes (it may have changed the UI)
+                self.needs_tree_fetch = true;
             }
             AgentStatus::NeedsContext => {
                 self.session.conversation_id = resp.sdk_session_id;

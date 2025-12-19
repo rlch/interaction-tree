@@ -19,16 +19,10 @@ export class SessionService extends EventEmitter {
         this.sessionManager = options.sessionManager;
         this.processManager = options.processManager;
         this.projectPath = options.projectPath;
-        if (this.vmClient) {
-            this.vmClient.on('treeChanged', () => this.invalidateTreeCache());
-            this.vmClient.on('interaction', () => this.invalidateTreeCache());
-        }
     }
     /** Set the VM client (called when VM connects after runApp) */
     setVmClient(vmClient) {
         this.vmClient = vmClient;
-        this.vmClient.on('treeChanged', () => this.invalidateTreeCache());
-        this.vmClient.on('interaction', () => this.invalidateTreeCache());
     }
     /** Clear the VM client (called when app exits but session persists) */
     clearVmClient() {
@@ -60,8 +54,14 @@ export class SessionService extends EventEmitter {
     }
     async execute(nodeId, interaction, args) {
         const client = this.requireVmConnection();
-        this.invalidateTreeCache();
-        return client.execute(nodeId, interaction, args);
+        const result = await client.execute(nodeId, interaction, args);
+        console.error(`[service.execute] result.tree exists: ${!!result.tree}, tree length: ${result.tree?.length ?? 0}`);
+        // Update cache from the returned tree (source of truth after settle)
+        if (result.tree) {
+            this.treeCache = result.tree;
+            this.treeCacheTime = Date.now();
+        }
+        return result;
     }
     async getState(nodeId) {
         const client = this.requireVmConnection();
@@ -69,18 +69,39 @@ export class SessionService extends EventEmitter {
     }
     async batch(steps) {
         const client = this.requireVmConnection();
-        this.invalidateTreeCache();
-        return client.batch(steps);
+        const result = await client.batch(steps);
+        // Update cache from the returned tree
+        if (result.tree) {
+            this.treeCache = result.tree;
+            this.treeCacheTime = Date.now();
+        }
+        return result;
     }
     async hotReload(clearErrors = false) {
-        const client = this.requireVmConnection();
+        // Use stdin 'r' key - more reliable than VM service extensions
+        const success = this.processManager.hotReload(this.sessionId);
+        if (!success) {
+            return { success: false, error: 'No running process to reload' };
+        }
+        // Invalidate cache - hot reload changes the tree
         this.invalidateTreeCache();
-        return client.hotReload(clearErrors);
+        if (clearErrors && this.vmClient?.isConnected) {
+            this.vmClient.clearRuntimeErrors();
+        }
+        return { success: true, reloadedAt: new Date().toISOString() };
     }
     async hotRestart(clearErrors = true) {
-        const client = this.requireVmConnection();
+        // Use stdin 'R' key - more reliable than VM service extensions
+        const success = this.processManager.hotRestart(this.sessionId);
+        if (!success) {
+            return { success: false, error: 'No running process to restart' };
+        }
+        // Invalidate cache - hot restart changes the tree
         this.invalidateTreeCache();
-        return client.hotRestart(clearErrors);
+        if (clearErrors && this.vmClient?.isConnected) {
+            this.vmClient.clearRuntimeErrors();
+        }
+        return { success: true, restartedAt: new Date().toISOString() };
     }
     async getRuntimeErrors() {
         const client = this.requireVmConnection();

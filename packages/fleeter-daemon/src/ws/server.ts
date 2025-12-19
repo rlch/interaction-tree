@@ -170,6 +170,13 @@ export class DaemonServer {
             sendResponse({ success: false, error: 'sessionId is required' });
             return;
           }
+          // Stop the app and kill the process first
+          const service = this.sessionServices.get(sessionId);
+          if (service) {
+            await service.stopApp();
+          } else {
+            await this.flutterManager.stopApp(sessionId);
+          }
           await this.sessionManager.destroy(sessionId);
           sendResponse({ success: true });
           this.broadcastEvent('session', 'session.destroyed', { sessionId });
