@@ -28,6 +28,31 @@ export class Daemon {
     this.server = new DaemonServer(this.sessionManager, this.flutterManager);
 
     this.setupFlutterEvents();
+    this.setupSessionEvents();
+  }
+
+  private setupSessionEvents(): void {
+    // Create SessionService when session is created (before VM connects)
+    this.sessionManager.on('session:created', (sessionInfo) => {
+      const session = this.sessionManager.get(sessionInfo.id);
+      if (session) {
+        const sessionService = new SessionService({
+          sessionId: sessionInfo.id,
+          // vmClient will be set later when VM connects
+          sessionManager: this.sessionManager,
+          processManager: this.flutterManager,
+          projectPath: session.projectPath,
+        });
+        this.server.registerSessionService(sessionInfo.id, sessionService);
+        log.daemon.info({ sessionId: sessionInfo.id }, 'SessionService created for new session');
+      }
+    });
+
+    // Clean up SessionService when session is destroyed
+    this.sessionManager.on('session:destroying', (sessionId: string) => {
+      this.server.unregisterSessionService(sessionId);
+      log.daemon.info({ sessionId }, 'SessionService unregistered for destroyed session');
+    });
   }
 
   private setupFlutterEvents(): void {
@@ -48,18 +73,13 @@ export class Daemon {
         
         this.vmClients.set(sessionId, vmClient);
         
-        // Create SessionService and register with server
-        const session = this.sessionManager.get(sessionId);
-        if (session) {
-          const sessionService = new SessionService({
-            sessionId,
-            vmClient,
-            sessionManager: this.sessionManager,
-            processManager: this.flutterManager,
-            projectPath: session.projectPath,
-          });
-          this.server.registerSessionService(sessionId, sessionService);
-          log.daemon.info({ sessionId }, 'SessionService registered');
+        // Set vmClient on existing SessionService
+        const sessionService = this.server.getSessionService(sessionId);
+        if (sessionService) {
+          sessionService.setVmClient(vmClient);
+          log.daemon.info({ sessionId }, 'VM client set on SessionService');
+        } else {
+          log.daemon.warn({ sessionId }, 'SessionService not found when VM connected');
         }
         
         log.daemon.info({ sessionId, vmClientsCount: this.vmClients.size, vmClientsKeys: Array.from(this.vmClients.keys()) }, 'VM client added to vmClients map');
@@ -70,12 +90,17 @@ export class Daemon {
 
     this.flutterManager.on('exit', (sessionId: string) => {
       this.sessionManager.updateStatus(sessionId, 'stopped');
-      this.server.unregisterSessionService(sessionId);
+      // Clear vmClient but keep SessionService (session still exists, app just stopped)
       const vmClient = this.vmClients.get(sessionId);
       if (vmClient) {
         vmClient.disconnect();
         this.vmClients.delete(sessionId);
       }
+      // Clear vmClient from service so it knows app is not running
+      const sessionService = this.server.getSessionService(sessionId);
+      sessionService?.clearVmClient();
+      // Note: Don't unregister SessionService here - session still exists,
+      // user can run the app again. Service is unregistered on session:destroying.
     });
 
     this.flutterManager.on('log', (sessionId: string, line: string) => {

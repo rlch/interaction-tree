@@ -16,6 +16,7 @@ export declare class Daemon {
     private vmClients;
     private running;
     constructor(config: DaemonConfig);
+    private setupSessionEvents;
     private setupFlutterEvents;
     start(): Promise<void>;
     shutdown(signal?: string): Promise<void>;

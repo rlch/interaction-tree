@@ -4,16 +4,13 @@
  * Uses the Claude Agent SDK which runs Claude Code as its runtime.
  * Authentication is handled by the Claude Code CLI in PATH.
  */
-import type { VMServiceClient } from '../vm/client.js';
 import type { AgentStreamEvent } from '../ws/protocol.js';
 import type { SessionManager } from '../session/manager.js';
-import type { FlutterProcessManager } from '../flutter/process-manager.js';
+import type { SessionService } from '../session/service.js';
 /** Context passed to the agent's MCP tools */
 export interface AgentContext {
-    vmClient?: VMServiceClient;
+    sessionService?: SessionService;
     sessionManager?: SessionManager;
-    flutterManager?: FlutterProcessManager;
-    sessionId?: string;
 }
 export declare const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
 export interface AgentConfig {
@@ -68,10 +65,8 @@ export declare class AgentExecutor {
     clearSession(): void;
     execute(options: {
         intent: string;
-        vmClient?: VMServiceClient;
+        sessionService?: SessionService;
         sessionManager?: SessionManager;
-        flutterManager?: FlutterProcessManager;
-        sessionId: string;
         cwd: string;
         onEvent?: AgentStreamCallback;
     }): Promise<AgentExecutionResult>;

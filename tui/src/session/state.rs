@@ -25,7 +25,7 @@ pub struct SessionState {
     pub chat_input: String,
     /// Cursor position in chat input
     pub chat_cursor: usize,
-    /// Chat scroll offset (lines from bottom, 0 = auto-scroll)
+    /// Scroll offset for chat view (0 = auto-scroll to bottom)
     pub chat_scroll: usize,
 
     pub tree: Option<InteractionTree>,

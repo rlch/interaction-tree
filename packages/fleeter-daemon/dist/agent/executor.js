@@ -26,34 +26,42 @@ function parseAskContext(content) {
 }
 /**
  * Create the interaction tree MCP server for the agent.
- * Takes context with optional VMClient, SessionManager, FlutterManager.
+ * Takes context with SessionService (per-session) and SessionManager (global operations).
  */
 function createInteractionTreeMcpServer(ctx) {
-    const { vmClient, sessionManager, flutterManager, sessionId } = ctx;
-    const notConnectedError = {
-        content: [{ type: 'text', text: 'Error: No Flutter app connected. Use run_app to start the app first.' }],
+    const { sessionService, sessionManager } = ctx;
+    const noSessionServiceError = {
+        content: [{ type: 'text', text: 'Error: No session service available. Connect to a session first.' }],
     };
-    const noSessionError = {
-        content: [{ type: 'text', text: 'Error: No session context available.' }],
+    const noSessionManagerError = {
+        content: [{ type: 'text', text: 'Error: No session manager available.' }],
     };
+    const wrapError = (err, context) => ({
+        content: [{ type: 'text', text: `Error ${context}: ${err instanceof Error ? err.message : String(err)}` }],
+    });
     const getStatusTool = tool('getStatus', 'Get the current connection status.', {}, async () => {
-        if (!vmClient) {
-            return { content: [{ type: 'text', text: JSON.stringify({ connected: false, message: 'No Flutter app connected' }, null, 2) }] };
+        if (!sessionService) {
+            return { content: [{ type: 'text', text: JSON.stringify({ connected: false, message: 'No session service available' }, null, 2) }] };
         }
-        const status = await vmClient.getStatus();
-        return {
-            content: [{ type: 'text', text: JSON.stringify(status, null, 2) }],
-        };
+        try {
+            const status = sessionService.getStatus();
+            return {
+                content: [{ type: 'text', text: JSON.stringify(status, null, 2) }],
+            };
+        }
+        catch (err) {
+            return wrapError(err, 'getting status');
+        }
     });
     const getTreeTool = tool('getTree', 'Get the interaction tree showing all interactable widgets in the app.', {
         includeBounds: z.boolean().optional(),
         includeState: z.boolean().optional(),
     }, async (args) => {
-        if (!vmClient || !vmClient.isConnected) {
-            return notConnectedError;
+        if (!sessionService) {
+            return noSessionServiceError;
         }
         try {
-            const tree = await vmClient.getTree({
+            const tree = await sessionService.getTree({
                 includeBounds: args.includeBounds,
                 includeWidgetType: true,
                 includeState: args.includeState,
@@ -63,9 +71,7 @@ function createInteractionTreeMcpServer(ctx) {
             };
         }
         catch (err) {
-            return {
-                content: [{ type: 'text', text: `Error getting tree: ${err instanceof Error ? err.message : String(err)}` }],
-            };
+            return wrapError(err, 'getting tree');
         }
     });
     const executeTool = tool('execute', 'Execute an interaction on a widget (tap, doubleTap, longPress, enterText, etc.)', {
@@ -73,35 +79,31 @@ function createInteractionTreeMcpServer(ctx) {
         interaction: z.string(),
         args: z.record(z.unknown()).optional(),
     }, async (args) => {
-        if (!vmClient || !vmClient.isConnected) {
-            return notConnectedError;
+        if (!sessionService) {
+            return noSessionServiceError;
         }
         try {
-            const result = await vmClient.execute(args.id, args.interaction, args.args);
+            const result = await sessionService.execute(args.id, args.interaction, args.args);
             return {
                 content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
             };
         }
         catch (err) {
-            return {
-                content: [{ type: 'text', text: `Error executing ${args.interaction} on ${args.id}: ${err instanceof Error ? err.message : String(err)}` }],
-            };
+            return wrapError(err, `executing ${args.interaction} on ${args.id}`);
         }
     });
     const getStateTool = tool('getState', 'Get the current state of a widget.', { id: z.string() }, async (args) => {
-        if (!vmClient || !vmClient.isConnected) {
-            return notConnectedError;
+        if (!sessionService) {
+            return noSessionServiceError;
         }
         try {
-            const state = await vmClient.getState(args.id);
+            const state = await sessionService.getState(args.id);
             return {
                 content: [{ type: 'text', text: JSON.stringify(state, null, 2) }],
             };
         }
         catch (err) {
-            return {
-                content: [{ type: 'text', text: `Error getting state for ${args.id}: ${err instanceof Error ? err.message : String(err)}` }],
-            };
+            return wrapError(err, `getting state for ${args.id}`);
         }
     });
     const batchTool = tool('batch', 'Execute multiple interactions in sequence.', {
@@ -118,92 +120,82 @@ function createInteractionTreeMcpServer(ctx) {
             timeoutMs: z.number().optional(),
         })),
     }, async (args) => {
-        if (!vmClient || !vmClient.isConnected) {
-            return notConnectedError;
+        if (!sessionService) {
+            return noSessionServiceError;
         }
         try {
-            const result = await vmClient.batch(args.steps);
+            const result = await sessionService.batch(args.steps);
             return {
                 content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
             };
         }
         catch (err) {
-            return {
-                content: [{ type: 'text', text: `Error executing batch: ${err instanceof Error ? err.message : String(err)}` }],
-            };
+            return wrapError(err, 'executing batch');
         }
     });
     const hotReloadTool = tool('hotReload', 'Hot reload the app to apply code changes.', {}, async () => {
-        if (!vmClient || !vmClient.isConnected) {
-            return notConnectedError;
+        if (!sessionService) {
+            return noSessionServiceError;
         }
         try {
-            const result = await vmClient.hotReload();
+            const result = await sessionService.hotReload();
             return {
                 content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
             };
         }
         catch (err) {
-            return {
-                content: [{ type: 'text', text: `Error during hot reload: ${err instanceof Error ? err.message : String(err)}` }],
-            };
+            return wrapError(err, 'during hot reload');
         }
     });
     const hotRestartTool = tool('hotRestart', 'Hot restart the app (full restart, loses state).', {}, async () => {
-        if (!vmClient || !vmClient.isConnected) {
-            return notConnectedError;
+        if (!sessionService) {
+            return noSessionServiceError;
         }
         try {
-            const result = await vmClient.hotRestart();
+            const result = await sessionService.hotRestart();
             return {
                 content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
             };
         }
         catch (err) {
-            return {
-                content: [{ type: 'text', text: `Error during hot restart: ${err instanceof Error ? err.message : String(err)}` }],
-            };
+            return wrapError(err, 'during hot restart');
         }
     });
-    const getLogsTool = tool('getLogs', 'Get recent logs from the Flutter app.', { since: z.string().optional() }, async (args) => {
-        if (!vmClient || !vmClient.isConnected) {
-            return notConnectedError;
+    const getLogsTool = tool('getLogs', 'Get recent logs from the Flutter app.', { maxLines: z.number().optional() }, async (args) => {
+        if (!sessionService) {
+            return noSessionServiceError;
         }
         try {
-            const logs = await vmClient.getLogs(args.since);
+            const logs = sessionService.getLogs(args.maxLines);
             return {
                 content: [{ type: 'text', text: JSON.stringify({ logs }, null, 2) }],
             };
         }
         catch (err) {
-            return {
-                content: [{ type: 'text', text: `Error getting logs: ${err instanceof Error ? err.message : String(err)}` }],
-            };
+            return wrapError(err, 'getting logs');
         }
     });
     const getErrorsTool = tool('getErrors', 'Get runtime errors from the app.', {}, async () => {
-        if (!vmClient || !vmClient.isConnected) {
-            return notConnectedError;
+        if (!sessionService) {
+            return noSessionServiceError;
         }
         try {
-            const errors = await vmClient.getRuntimeErrors();
+            const errors = await sessionService.getRuntimeErrors();
             return {
                 content: [{ type: 'text', text: JSON.stringify({ errors }, null, 2) }],
             };
         }
         catch (err) {
-            return {
-                content: [{ type: 'text', text: `Error getting errors: ${err instanceof Error ? err.message : String(err)}` }],
-            };
+            return wrapError(err, 'getting errors');
         }
     });
-    // Session management tools
+    // Session management tools (use sessionManager for global operations)
     const createSessionTool = tool('createSession', 'Create a new Flutter session.', {
         name: z.string().describe('Session name'),
         projectPath: z.string().describe('Path to Flutter project'),
     }, async (args) => {
         if (!sessionManager) {
-            return noSessionError;
+            return noSessionManagerError;
         }
         try {
             const session = sessionManager.create({ name: args.name, projectPath: args.projectPath });
@@ -212,14 +204,12 @@ function createInteractionTreeMcpServer(ctx) {
             };
         }
         catch (err) {
-            return {
-                content: [{ type: 'text', text: `Error creating session: ${err instanceof Error ? err.message : String(err)}` }],
-            };
+            return wrapError(err, 'creating session');
         }
     });
     const listSessionsTool = tool('listSessions', 'List all Flutter sessions.', {}, async () => {
         if (!sessionManager) {
-            return noSessionError;
+            return noSessionManagerError;
         }
         const sessions = sessionManager.list();
         return {
@@ -230,7 +220,7 @@ function createInteractionTreeMcpServer(ctx) {
         sessionId: z.string().describe('Session ID or name'),
     }, async (args) => {
         if (!sessionManager) {
-            return noSessionError;
+            return noSessionManagerError;
         }
         const session = sessionManager.get(args.sessionId);
         if (!session) {
@@ -246,7 +236,7 @@ function createInteractionTreeMcpServer(ctx) {
         sessionId: z.string().describe('Session ID or name'),
     }, async (args) => {
         if (!sessionManager) {
-            return noSessionError;
+            return noSessionManagerError;
         }
         try {
             await sessionManager.destroy(args.sessionId);
@@ -255,62 +245,44 @@ function createInteractionTreeMcpServer(ctx) {
             };
         }
         catch (err) {
-            return {
-                content: [{ type: 'text', text: `Error destroying session: ${err instanceof Error ? err.message : String(err)}` }],
-            };
+            return wrapError(err, 'destroying session');
         }
     });
-    // App lifecycle tools
+    // App lifecycle tools (use sessionService)
     const runAppTool = tool('runApp', 'Run the Flutter app in the current session.', {
         device: z.string().optional().describe('Target device'),
         flavor: z.string().optional().describe('Build flavor'),
         target: z.string().optional().describe('Target file (e.g., lib/main.dart)'),
     }, async (args) => {
-        if (!sessionManager || !flutterManager || !sessionId) {
-            return noSessionError;
-        }
-        const session = sessionManager.get(sessionId);
-        if (!session) {
-            return {
-                content: [{ type: 'text', text: `Error: Session not found: ${sessionId}` }],
-            };
+        if (!sessionService) {
+            return noSessionServiceError;
         }
         try {
-            sessionManager.updateStatus(sessionId, 'starting');
-            const flutterProcess = await flutterManager.runApp(sessionId, session.projectPath, {
+            await sessionService.runApp({
                 device: args.device,
                 flavor: args.flavor,
                 target: args.target,
             });
-            sessionManager.updateStatus(sessionId, 'running', { pid: flutterProcess.pid });
-            return {
-                content: [{ type: 'text', text: JSON.stringify({ success: true, pid: flutterProcess.pid }, null, 2) }],
-            };
-        }
-        catch (err) {
-            sessionManager.updateStatus(sessionId, 'not_running');
-            return {
-                content: [{ type: 'text', text: `Error running app: ${err instanceof Error ? err.message : String(err)}` }],
-            };
-        }
-    });
-    const stopAppTool = tool('stopApp', 'Stop the Flutter app in the current session.', {}, async () => {
-        if (!flutterManager || !sessionId) {
-            return noSessionError;
-        }
-        try {
-            await flutterManager.stopApp(sessionId);
-            if (sessionManager) {
-                sessionManager.updateStatus(sessionId, 'not_running');
-            }
             return {
                 content: [{ type: 'text', text: JSON.stringify({ success: true }, null, 2) }],
             };
         }
         catch (err) {
+            return wrapError(err, 'running app');
+        }
+    });
+    const stopAppTool = tool('stopApp', 'Stop the Flutter app in the current session.', {}, async () => {
+        if (!sessionService) {
+            return noSessionServiceError;
+        }
+        try {
+            await sessionService.stopApp();
             return {
-                content: [{ type: 'text', text: `Error stopping app: ${err instanceof Error ? err.message : String(err)}` }],
+                content: [{ type: 'text', text: JSON.stringify({ success: true }, null, 2) }],
             };
+        }
+        catch (err) {
+            return wrapError(err, 'stopping app');
         }
     });
     return createSdkMcpServer({
@@ -505,7 +477,7 @@ export class AgentExecutor {
         this.sdkSessionId = undefined;
     }
     async execute(options) {
-        const { intent, vmClient, sessionManager, flutterManager, sessionId, cwd, onEvent } = options;
+        const { intent, sessionService, sessionManager, cwd, onEvent } = options;
         const { AGENT_SYSTEM_PROMPT } = await import('./prompts.js');
         const config = getDefaultAgentConfig(cwd, this.config);
         // Resume existing session if we have one
@@ -513,10 +485,8 @@ export class AgentExecutor {
             config.resume = this.sdkSessionId;
         }
         const ctx = {
-            vmClient,
+            sessionService,
             sessionManager,
-            flutterManager,
-            sessionId,
         };
         const result = await executeAgent(AGENT_SYSTEM_PROMPT, intent, config, ctx, onEvent);
         // Store the session ID for future resumption

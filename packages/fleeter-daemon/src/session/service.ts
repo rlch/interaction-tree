@@ -20,7 +20,7 @@ import type {
 
 export interface SessionServiceOptions {
   sessionId: string;
-  vmClient: VMServiceClient;
+  vmClient?: VMServiceClient;
   sessionManager: SessionManager;
   processManager: FlutterProcessManager;
   projectPath: string;
@@ -34,7 +34,7 @@ export interface SessionStatus {
 
 export class SessionService extends EventEmitter {
   private readonly sessionId: string;
-  private readonly vmClient: VMServiceClient;
+  private vmClient?: VMServiceClient;
   private readonly sessionManager: SessionManager;
   private readonly processManager: FlutterProcessManager;
   private readonly projectPath: string;
@@ -51,8 +51,23 @@ export class SessionService extends EventEmitter {
     this.processManager = options.processManager;
     this.projectPath = options.projectPath;
 
+    if (this.vmClient) {
+      this.vmClient.on('treeChanged', () => this.invalidateTreeCache());
+      this.vmClient.on('interaction', () => this.invalidateTreeCache());
+    }
+  }
+
+  /** Set the VM client (called when VM connects after runApp) */
+  setVmClient(vmClient: VMServiceClient): void {
+    this.vmClient = vmClient;
     this.vmClient.on('treeChanged', () => this.invalidateTreeCache());
     this.vmClient.on('interaction', () => this.invalidateTreeCache());
+  }
+
+  /** Clear the VM client (called when app exits but session persists) */
+  clearVmClient(): void {
+    this.vmClient = undefined;
+    this.invalidateTreeCache();
   }
 
   get id(): string {
@@ -60,10 +75,10 @@ export class SessionService extends EventEmitter {
   }
 
   get isVmConnected(): boolean {
-    return this.vmClient.isConnected;
+    return this.vmClient?.isConnected ?? false;
   }
 
-  get client(): VMServiceClient {
+  get client(): VMServiceClient | undefined {
     return this.vmClient;
   }
 
@@ -72,14 +87,14 @@ export class SessionService extends EventEmitter {
   // ─────────────────────────────────────────────────────────────────────────────
 
   async getTree(options?: GetTreeOptions): Promise<InteractionTarget[]> {
-    this.requireVmConnection();
+    const client = this.requireVmConnection();
 
     const now = Date.now();
     if (this.treeCache && now - this.treeCacheTime < this.treeCacheTtlMs) {
       return this.treeCache;
     }
 
-    const tree = await this.vmClient.getTree(options);
+    const tree = await client.getTree(options);
     this.treeCache = tree;
     this.treeCacheTime = now;
     return tree;
@@ -90,41 +105,41 @@ export class SessionService extends EventEmitter {
     interaction: string,
     args?: Record<string, unknown>
   ): Promise<InteractionResult> {
-    this.requireVmConnection();
+    const client = this.requireVmConnection();
     this.invalidateTreeCache();
-    return this.vmClient.execute(nodeId, interaction, args);
+    return client.execute(nodeId, interaction, args);
   }
 
   async getState(nodeId: string): Promise<Record<string, unknown>> {
-    this.requireVmConnection();
-    return this.vmClient.getState(nodeId);
+    const client = this.requireVmConnection();
+    return client.getState(nodeId);
   }
 
   async batch(steps: BatchStep[]): Promise<BatchResult> {
-    this.requireVmConnection();
+    const client = this.requireVmConnection();
     this.invalidateTreeCache();
-    return this.vmClient.batch(steps);
+    return client.batch(steps);
   }
 
   async hotReload(clearErrors = false): Promise<HotReloadResult> {
-    this.requireVmConnection();
+    const client = this.requireVmConnection();
     this.invalidateTreeCache();
-    return this.vmClient.hotReload(clearErrors);
+    return client.hotReload(clearErrors);
   }
 
   async hotRestart(clearErrors = true): Promise<HotReloadResult> {
-    this.requireVmConnection();
+    const client = this.requireVmConnection();
     this.invalidateTreeCache();
-    return this.vmClient.hotRestart(clearErrors);
+    return client.hotRestart(clearErrors);
   }
 
   async getRuntimeErrors(): Promise<RuntimeError[]> {
-    this.requireVmConnection();
-    return this.vmClient.getRuntimeErrors();
+    const client = this.requireVmConnection();
+    return client.getRuntimeErrors();
   }
 
   clearRuntimeErrors(): void {
-    if (this.vmClient.isConnected) {
+    if (this.vmClient?.isConnected) {
       this.vmClient.clearRuntimeErrors();
     }
   }
@@ -145,8 +160,8 @@ export class SessionService extends EventEmitter {
 
     return {
       sessionInfo: this.sessionManager.toInfo(session),
-      vmConnected: this.vmClient.isConnected,
-      vmServiceUri: this.vmClient.connectionUri ?? undefined,
+      vmConnected: this.vmClient?.isConnected ?? false,
+      vmServiceUri: this.vmClient?.connectionUri ?? undefined,
     };
   }
 
@@ -167,12 +182,13 @@ export class SessionService extends EventEmitter {
   // Internal helpers
   // ─────────────────────────────────────────────────────────────────────────────
 
-  private requireVmConnection(): void {
-    if (!this.vmClient.isConnected) {
+  private requireVmConnection(): VMServiceClient {
+    if (!this.vmClient || !this.vmClient.isConnected) {
       throw new Error(
         'VM service not connected. Start the app with runApp() first, or wait for the VM to connect.'
       );
     }
+    return this.vmClient;
   }
 
   private invalidateTreeCache(): void {

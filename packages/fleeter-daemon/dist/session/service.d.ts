@@ -10,7 +10,7 @@ import type { SessionInfo } from './types.js';
 import type { InteractionTarget, InteractionResult, BatchStep, BatchResult, GetTreeOptions, RuntimeError, HotReloadResult } from '../vm/types.js';
 export interface SessionServiceOptions {
     sessionId: string;
-    vmClient: VMServiceClient;
+    vmClient?: VMServiceClient;
     sessionManager: SessionManager;
     processManager: FlutterProcessManager;
     projectPath: string;
@@ -22,7 +22,7 @@ export interface SessionStatus {
 }
 export declare class SessionService extends EventEmitter {
     private readonly sessionId;
-    private readonly vmClient;
+    private vmClient?;
     private readonly sessionManager;
     private readonly processManager;
     private readonly projectPath;
@@ -30,9 +30,13 @@ export declare class SessionService extends EventEmitter {
     private treeCacheTime;
     private readonly treeCacheTtlMs;
     constructor(options: SessionServiceOptions);
+    /** Set the VM client (called when VM connects after runApp) */
+    setVmClient(vmClient: VMServiceClient): void;
+    /** Clear the VM client (called when app exits but session persists) */
+    clearVmClient(): void;
     get id(): string;
     get isVmConnected(): boolean;
-    get client(): VMServiceClient;
+    get client(): VMServiceClient | undefined;
     getTree(options?: GetTreeOptions): Promise<InteractionTarget[]>;
     execute(nodeId: string, interaction: string, args?: Record<string, unknown>): Promise<InteractionResult>;
     getState(nodeId: string): Promise<Record<string, unknown>>;

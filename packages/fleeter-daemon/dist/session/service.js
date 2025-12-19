@@ -19,14 +19,27 @@ export class SessionService extends EventEmitter {
         this.sessionManager = options.sessionManager;
         this.processManager = options.processManager;
         this.projectPath = options.projectPath;
+        if (this.vmClient) {
+            this.vmClient.on('treeChanged', () => this.invalidateTreeCache());
+            this.vmClient.on('interaction', () => this.invalidateTreeCache());
+        }
+    }
+    /** Set the VM client (called when VM connects after runApp) */
+    setVmClient(vmClient) {
+        this.vmClient = vmClient;
         this.vmClient.on('treeChanged', () => this.invalidateTreeCache());
         this.vmClient.on('interaction', () => this.invalidateTreeCache());
+    }
+    /** Clear the VM client (called when app exits but session persists) */
+    clearVmClient() {
+        this.vmClient = undefined;
+        this.invalidateTreeCache();
     }
     get id() {
         return this.sessionId;
     }
     get isVmConnected() {
-        return this.vmClient.isConnected;
+        return this.vmClient?.isConnected ?? false;
     }
     get client() {
         return this.vmClient;
@@ -35,46 +48,46 @@ export class SessionService extends EventEmitter {
     // VMServiceClient methods (require VM connection)
     // ─────────────────────────────────────────────────────────────────────────────
     async getTree(options) {
-        this.requireVmConnection();
+        const client = this.requireVmConnection();
         const now = Date.now();
         if (this.treeCache && now - this.treeCacheTime < this.treeCacheTtlMs) {
             return this.treeCache;
         }
-        const tree = await this.vmClient.getTree(options);
+        const tree = await client.getTree(options);
         this.treeCache = tree;
         this.treeCacheTime = now;
         return tree;
     }
     async execute(nodeId, interaction, args) {
-        this.requireVmConnection();
+        const client = this.requireVmConnection();
         this.invalidateTreeCache();
-        return this.vmClient.execute(nodeId, interaction, args);
+        return client.execute(nodeId, interaction, args);
     }
     async getState(nodeId) {
-        this.requireVmConnection();
-        return this.vmClient.getState(nodeId);
+        const client = this.requireVmConnection();
+        return client.getState(nodeId);
     }
     async batch(steps) {
-        this.requireVmConnection();
+        const client = this.requireVmConnection();
         this.invalidateTreeCache();
-        return this.vmClient.batch(steps);
+        return client.batch(steps);
     }
     async hotReload(clearErrors = false) {
-        this.requireVmConnection();
+        const client = this.requireVmConnection();
         this.invalidateTreeCache();
-        return this.vmClient.hotReload(clearErrors);
+        return client.hotReload(clearErrors);
     }
     async hotRestart(clearErrors = true) {
-        this.requireVmConnection();
+        const client = this.requireVmConnection();
         this.invalidateTreeCache();
-        return this.vmClient.hotRestart(clearErrors);
+        return client.hotRestart(clearErrors);
     }
     async getRuntimeErrors() {
-        this.requireVmConnection();
-        return this.vmClient.getRuntimeErrors();
+        const client = this.requireVmConnection();
+        return client.getRuntimeErrors();
     }
     clearRuntimeErrors() {
-        if (this.vmClient.isConnected) {
+        if (this.vmClient?.isConnected) {
             this.vmClient.clearRuntimeErrors();
         }
     }
@@ -91,8 +104,8 @@ export class SessionService extends EventEmitter {
         }
         return {
             sessionInfo: this.sessionManager.toInfo(session),
-            vmConnected: this.vmClient.isConnected,
-            vmServiceUri: this.vmClient.connectionUri ?? undefined,
+            vmConnected: this.vmClient?.isConnected ?? false,
+            vmServiceUri: this.vmClient?.connectionUri ?? undefined,
         };
     }
     // ─────────────────────────────────────────────────────────────────────────────
@@ -109,9 +122,10 @@ export class SessionService extends EventEmitter {
     // Internal helpers
     // ─────────────────────────────────────────────────────────────────────────────
     requireVmConnection() {
-        if (!this.vmClient.isConnected) {
+        if (!this.vmClient || !this.vmClient.isConnected) {
             throw new Error('VM service not connected. Start the app with runApp() first, or wait for the VM to connect.');
         }
+        return this.vmClient;
     }
     invalidateTreeCache() {
         this.treeCache = null;

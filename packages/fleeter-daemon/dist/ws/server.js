@@ -508,10 +508,8 @@ export class DaemonServer {
                         log.agent.debug({ sessionId }, 'Calling agent.execute');
                         const result = await session.agent.execute({
                             intent,
-                            vmClient: service?.client,
+                            sessionService: service,
                             sessionManager: this.sessionManager,
-                            flutterManager: this.flutterManager,
-                            sessionId,
                             cwd: session.projectPath,
                             onEvent,
                         });
