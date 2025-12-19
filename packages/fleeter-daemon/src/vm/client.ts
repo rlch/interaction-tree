@@ -76,6 +76,37 @@ class RateLimiter {
   }
 }
 
+/** Error log with bounded size (like Dart MCP's ~5K token limit) */
+class ErrorLog {
+  private errors: RuntimeError[] = [];
+  private maxSize = 20000; // ~5K tokens worth of characters
+  private currentSize = 0;
+
+  add(error: RuntimeError): void {
+    const errorSize = (error.message?.length ?? 0) + (error.stackTrace?.length ?? 0);
+    
+    // Trim old errors if we'd exceed the limit
+    while (this.currentSize + errorSize > this.maxSize && this.errors.length > 0) {
+      const removed = this.errors.shift();
+      if (removed) {
+        this.currentSize -= (removed.message?.length ?? 0) + (removed.stackTrace?.length ?? 0);
+      }
+    }
+    
+    this.errors.push(error);
+    this.currentSize += errorSize;
+  }
+
+  getAll(): RuntimeError[] {
+    return [...this.errors];
+  }
+
+  clear(): void {
+    this.errors = [];
+    this.currentSize = 0;
+  }
+}
+
 export class VMServiceClient extends EventEmitter {
   private ws: WebSocket | null = null;
   private requestId = 0;
@@ -89,6 +120,7 @@ export class VMServiceClient extends EventEmitter {
   private frameRateLimiter = new RateLimiter(5); // 5 FPS like DevTools
   private receivedNavigationEvent = false;
   private receivedReloadEvent = false;
+  private errorLog = new ErrorLog();
 
   get isConnected(): boolean {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
@@ -150,23 +182,24 @@ export class VMServiceClient extends EventEmitter {
   /**
    * Subscribe to VM Service event streams for real-time updates.
    * Similar to how Flutter DevTools receives widget tree change notifications.
+   * Also subscribes to Stderr for runtime error collection (like Dart MCP).
    */
   private async subscribeToStreams(): Promise<void> {
     log.vm.debug('Subscribing to VM Service streams');
-    try {
-      // Subscribe to Extension events (Flutter.Frame, Flutter.Navigation, etc.)
-      const extResult = await this.callMethod('streamListen', { streamId: 'Extension' });
-      log.vm.debug({ result: extResult }, 'Subscribed to Extension stream');
-    } catch (err) {
-      log.vm.warn({ err }, 'Failed to subscribe to Extension stream (may already be subscribed)');
-    }
     
-    try {
-      // Subscribe to Isolate events (reload, restart)
-      const isoResult = await this.callMethod('streamListen', { streamId: 'Isolate' });
-      log.vm.debug({ result: isoResult }, 'Subscribed to Isolate stream');
-    } catch (err) {
-      log.vm.warn({ err }, 'Failed to subscribe to Isolate stream (may already be subscribed)');
+    const streams = [
+      { id: 'Extension', desc: 'Extension events (Flutter.Frame, Flutter.Navigation, Flutter.Error)' },
+      { id: 'Isolate', desc: 'Isolate events (reload, restart)' },
+      { id: 'Stderr', desc: 'Stderr output for error collection' },
+    ];
+    
+    for (const stream of streams) {
+      try {
+        await this.callMethod('streamListen', { streamId: stream.id });
+        log.vm.debug({ streamId: stream.id }, `Subscribed to ${stream.desc}`);
+      } catch (err) {
+        log.vm.warn({ err, streamId: stream.id }, `Failed to subscribe to ${stream.id} stream (may already be subscribed)`);
+      }
     }
   }
 
@@ -286,13 +319,37 @@ export class VMServiceClient extends EventEmitter {
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // Dart Tooling Methods
+  // Dart Tooling Methods (aligned with Dart MCP server approach)
   // ─────────────────────────────────────────────────────────────────────────────
 
-  async hotReload(): Promise<HotReloadResult> {
+  async hotReload(clearErrors = false): Promise<HotReloadResult> {
+    if (clearErrors) {
+      this.errorLog.clear();
+    }
+    
     try {
-      // Use callExtension to include isolateId
-      await this.callExtension('ext.flutter.reassemble', {});
+      // Try reloadSources first (same as Dart MCP)
+      // This is the standard VM service method for hot reload
+      const result = await this.callMethod('reloadSources', {
+        isolateId: this.isolateId,
+        force: false,
+      }) as { success?: boolean };
+      
+      if (result.success === false) {
+        return {
+          success: false,
+          error: 'Reload failed - sources may have errors',
+        };
+      }
+      
+      // Trigger reassemble after reloadSources for Flutter to update widgets
+      try {
+        await this.callExtension('ext.flutter.reassemble', {});
+      } catch {
+        // Reassemble failure is non-fatal, reload still succeeded
+        log.vm.warn('Reassemble failed after reload, but reload succeeded');
+      }
+      
       return { success: true, reloadedAt: new Date().toISOString() };
     } catch (err) {
       return {
@@ -302,11 +359,24 @@ export class VMServiceClient extends EventEmitter {
     }
   }
 
-  async hotRestart(): Promise<HotReloadResult> {
+  async hotRestart(clearErrors = true): Promise<HotReloadResult> {
+    // Always clear errors on restart (same as Dart MCP)
+    if (clearErrors) {
+      this.errorLog.clear();
+    }
+    
     try {
-      // Hot restart via Flutter extension
-      await this.callExtension('ext.flutter.hotRestart', {});
-      return { success: true, restartedAt: new Date().toISOString() };
+      // hotRestart is a service method, not an extension (called without isolateId prefix)
+      const result = await this.callMethod('hotRestart', {
+        isolateId: this.isolateId,
+      }) as { type?: string };
+      
+      const success = result.type === 'Success' || result.type === undefined;
+      return { 
+        success, 
+        restartedAt: new Date().toISOString(),
+        error: success ? undefined : 'Restart returned non-success type',
+      };
     } catch (err) {
       return {
         success: false,
@@ -316,14 +386,25 @@ export class VMServiceClient extends EventEmitter {
   }
 
   async getLogs(_since?: string): Promise<LogEntry[]> {
-    // TODO: Implement log collection from VM service
-    // This may require connecting to the Dart Tooling Daemon instead
+    // Logs are collected via session manager from process stdout/stderr.
+    // VM service log collection would require an ext.interaction_tree.getLogs
+    // extension in the Flutter package. For now, this returns empty and
+    // callers should use SessionManager.getLogs() instead.
     return [];
   }
 
-  async getRuntimeErrors(): Promise<RuntimeError[]> {
-    // TODO: Implement error collection
-    return [];
+  async getRuntimeErrors(clear = false): Promise<RuntimeError[]> {
+    // Errors are collected from Flutter.Error extension events and Stderr stream
+    // (same approach as Dart MCP server)
+    const errors = this.errorLog.getAll();
+    if (clear) {
+      this.errorLog.clear();
+    }
+    return errors;
+  }
+
+  clearRuntimeErrors(): void {
+    this.errorLog.clear();
   }
 
   async getStatus(): Promise<AppStatus> {
@@ -435,15 +516,25 @@ export class VMServiceClient extends EventEmitter {
   /**
    * Handle incoming VM Service stream events.
    * Emits appropriate events for tree updates.
+   * Collects runtime errors from Flutter.Error and Stderr streams (like Dart MCP).
    */
-  private handleStreamEvent(params: { streamId?: string; event?: { kind?: string; extensionKind?: string; extensionData?: unknown } }): void {
+  private handleStreamEvent(params: { 
+    streamId?: string; 
+    event?: { 
+      kind?: string; 
+      extensionKind?: string; 
+      extensionData?: unknown;
+      bytes?: string; // Base64-encoded stderr bytes
+      timestamp?: number;
+    } 
+  }): void {
     const { streamId, event } = params;
     if (!event) {
       log.vm.debug({ streamId }, 'Stream event with no event data');
       return;
     }
 
-    // Extension events (Flutter.Frame, Flutter.Navigation, etc.)
+    // Extension events (Flutter.Frame, Flutter.Navigation, Flutter.Error, etc.)
     if (streamId === 'Extension') {
       const extensionKind = event.extensionKind;
       log.vm.debug({ extensionKind }, 'Extension event received');
@@ -471,8 +562,42 @@ export class VMServiceClient extends EventEmitter {
         log.vm.info('First frame event - triggering initial tree fetch');
         // First frame after app start - definitely want tree
         this.emit('treeChanged');
+      } else if (extensionKind === 'Flutter.Error') {
+        // Collect Flutter errors (same as Dart MCP)
+        const errorData = event.extensionData as { 
+          description?: string; 
+          errorsSinceReload?: number;
+          renderedErrorText?: string;
+        } | undefined;
+        
+        const message = errorData?.renderedErrorText || 
+                       errorData?.description || 
+                       JSON.stringify(event.extensionData);
+        
+        log.vm.warn({ errorData }, 'Flutter error received');
+        this.errorLog.add({
+          message,
+          timestamp: new Date().toISOString(),
+        });
       } else {
         log.vm.trace({ extensionKind }, 'Unhandled extension event');
+      }
+    }
+
+    // Stderr stream (runtime errors)
+    if (streamId === 'Stderr' && event.bytes) {
+      try {
+        // Decode base64 stderr bytes (same as Dart MCP)
+        const message = Buffer.from(event.bytes, 'base64').toString('utf-8').trim();
+        if (message) {
+          log.vm.debug({ message: message.substring(0, 100) }, 'Stderr received');
+          this.errorLog.add({
+            message,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      } catch (err) {
+        log.vm.warn({ err }, 'Failed to decode stderr bytes');
       }
     }
 

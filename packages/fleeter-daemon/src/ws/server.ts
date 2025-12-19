@@ -274,8 +274,14 @@ export class DaemonServer {
             sendResponse({ success: false, error: NO_SESSION_ERROR });
             return;
           }
-          const success = this.flutterManager.hotReload(sessionId);
-          sendResponse({ success, error: success ? undefined : 'No process running' });
+          const vmClient = this.vmClients.get(sessionId);
+          if (!vmClient?.isConnected) {
+            sendResponse({ success: false, error: 'VM client not connected' });
+            return;
+          }
+          const clearErrors = (data as { clearRuntimeErrors?: boolean })?.clearRuntimeErrors ?? false;
+          const result = await vmClient.hotReload(clearErrors);
+          sendResponse({ success: result.success, data: result, error: result.error });
           break;
         }
 
@@ -286,8 +292,14 @@ export class DaemonServer {
             sendResponse({ success: false, error: NO_SESSION_ERROR });
             return;
           }
-          const success = this.flutterManager.hotRestart(sessionId);
-          sendResponse({ success, error: success ? undefined : 'No process running' });
+          const vmClient = this.vmClients.get(sessionId);
+          if (!vmClient?.isConnected) {
+            sendResponse({ success: false, error: 'VM client not connected' });
+            return;
+          }
+          const clearErrors = (data as { clearRuntimeErrors?: boolean })?.clearRuntimeErrors ?? true;
+          const result = await vmClient.hotRestart(clearErrors);
+          sendResponse({ success: result.success, data: result, error: result.error });
           break;
         }
 
@@ -323,9 +335,38 @@ export class DaemonServer {
           break;
         }
 
-        case 'execute_interaction':
-          sendResponse({ success: false, error: `${action} not yet implemented` });
+        case 'execute_interaction': {
+          const clientEntry = this.clients.get(clientId);
+          const sessionId = clientEntry?.client.currentSessionId;
+          if (!sessionId) {
+            sendResponse({ success: false, error: NO_SESSION_ERROR });
+            return;
+          }
+          const vmClient = this.vmClients.get(sessionId);
+          if (!vmClient?.isConnected) {
+            sendResponse({ success: false, error: 'VM client not connected' });
+            return;
+          }
+          const { nodeId, interaction, args } = data as {
+            nodeId: string;
+            interaction: string;
+            args?: Record<string, unknown>;
+          };
+          if (!nodeId || !interaction) {
+            sendResponse({ success: false, error: 'nodeId and interaction are required' });
+            return;
+          }
+          try {
+            const result = await vmClient.execute(nodeId, interaction, args);
+            sendResponse({ success: true, data: result });
+          } catch (err) {
+            sendResponse({
+              success: false,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
           break;
+        }
 
         case 'agent_message': {
           const clientEntry = this.clients.get(clientId);

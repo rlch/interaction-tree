@@ -131,7 +131,7 @@ export class McpProxy {
             try {
                 const result = await this.daemonClient.sendCommand(name, args);
                 return {
-                    content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+                    content: [{ type: 'text', text: JSON.stringify(result ?? { success: true }, null, 2) }],
                 };
             }
             catch (err) {

@@ -40,6 +40,7 @@ export declare class VMServiceClient extends EventEmitter {
     private frameRateLimiter;
     private receivedNavigationEvent;
     private receivedReloadEvent;
+    private errorLog;
     get isConnected(): boolean;
     get connectionUri(): string | null;
     /**
@@ -50,6 +51,7 @@ export declare class VMServiceClient extends EventEmitter {
     /**
      * Subscribe to VM Service event streams for real-time updates.
      * Similar to how Flutter DevTools receives widget tree change notifications.
+     * Also subscribes to Stderr for runtime error collection (like Dart MCP).
      */
     private subscribeToStreams;
     /**
@@ -74,10 +76,11 @@ export declare class VMServiceClient extends EventEmitter {
     getState(id: string): Promise<Record<string, unknown>>;
     executeAction(id: string, actionName: string, args?: Record<string, unknown>): Promise<InteractionResult>;
     batch(steps: BatchStep[]): Promise<BatchResult>;
-    hotReload(): Promise<HotReloadResult>;
-    hotRestart(): Promise<HotReloadResult>;
+    hotReload(clearErrors?: boolean): Promise<HotReloadResult>;
+    hotRestart(clearErrors?: boolean): Promise<HotReloadResult>;
     getLogs(_since?: string): Promise<LogEntry[]>;
-    getRuntimeErrors(): Promise<RuntimeError[]>;
+    getRuntimeErrors(clear?: boolean): Promise<RuntimeError[]>;
+    clearRuntimeErrors(): void;
     getStatus(): Promise<AppStatus>;
     private findMainIsolate;
     private callMethod;
@@ -86,6 +89,7 @@ export declare class VMServiceClient extends EventEmitter {
     /**
      * Handle incoming VM Service stream events.
      * Emits appropriate events for tree updates.
+     * Collects runtime errors from Flutter.Error and Stderr streams (like Dart MCP).
      */
     private handleStreamEvent;
     private handleClose;
