@@ -102,10 +102,12 @@ fn render_chat(frame: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
     
-    // Calculate scroll - auto-scroll to bottom
+    // Calculate scroll - use user offset from bottom (0 = bottom, higher = scrolled up)
     let content_height = all_lines.len() as u16;
     let visible_height = inner.height;
-    let scroll = content_height.saturating_sub(visible_height);
+    let max_scroll = content_height.saturating_sub(visible_height);
+    let user_offset = (app.session.chat_scroll as u16).min(max_scroll);
+    let scroll = max_scroll.saturating_sub(user_offset);
     
     let paragraph = Paragraph::new(all_lines)
         .wrap(Wrap { trim: false })
