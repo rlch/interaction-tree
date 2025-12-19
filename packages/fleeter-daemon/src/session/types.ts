@@ -19,6 +19,22 @@ export interface SessionInfo {
 }
 
 export const MAX_SESSION_LOGS = 1000;
+export const MAX_CHAT_HISTORY = 100;
+
+/** Chat message role */
+export type ChatRole = 'user' | 'assistant';
+
+/** Chat message content types */
+export type ChatContent = 
+  | { type: 'text'; text: string }
+  | { type: 'tool_call'; name: string; args: unknown; output?: string; status: 'running' | 'success' | 'failed' };
+
+/** A chat message in conversation history */
+export interface ChatMessage {
+  role: ChatRole;
+  content: ChatContent;
+  timestamp: string;
+}
 
 export interface Session {
   id: string;
@@ -32,6 +48,7 @@ export interface Session {
   lastActiveAt: Date;
   agent?: AgentExecutor;  // Per-session agent
   logs: string[];  // Persisted logs (survives process restarts)
+  chatHistory: ChatMessage[];  // Conversation history for TUI
 }
 
 export interface CreateSessionOptions {

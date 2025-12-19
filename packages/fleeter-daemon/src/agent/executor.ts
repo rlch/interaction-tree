@@ -16,8 +16,10 @@ import type { VMServiceClient } from '../vm/client.js';
 import type { BatchStep } from '../vm/types.js';
 import type { AgentStreamEvent } from '../ws/protocol.js';
 
+export const DEFAULT_MODEL = 'claude-haiku-4-5-20251001';
+
 export interface AgentConfig {
-  /** Model to use (optional, uses SDK default) */
+  /** Model to use (defaults to claude-haiku-4-5-20251001) */
   model?: string;
   /** Max conversation turns before giving up */
   maxTurns?: number;
@@ -325,11 +327,10 @@ export async function executeAgent(
     ],
     permissionMode: 'bypassPermissions',
     allowDangerouslySkipPermissions: true,
+    includePartialMessages: true,  // Enable streaming
   };
 
-  if (config.model) {
-    options.model = config.model;
-  }
+  options.model = config.model ?? DEFAULT_MODEL;
 
   if (config.resume) {
     options.resume = config.resume;
@@ -345,11 +346,19 @@ export async function executeAgent(
         sessionId = message.session_id;
       }
 
+      // Handle streaming partial messages (text deltas)
+      if (message.type === 'stream_event') {
+        const evt = message.event;
+        if (evt.type === 'content_block_delta' && evt.delta.type === 'text_delta') {
+          onEvent?.({ event: { kind: 'text_delta', text: evt.delta.text } });
+        }
+      }
+
       if (message.type === 'assistant') {
         for (const block of message.message.content) {
           if (block.type === 'text') {
             textBlocks.push(block.text);
-            onEvent?.({ event: { kind: 'text_delta', text: block.text } });
+            // Don't emit text_delta here since we already streamed it via stream_event
           } else if (block.type === 'tool_use') {
             onEvent?.({ event: { kind: 'tool_call_start', toolName: block.name, toolCallId: block.id } });
           }

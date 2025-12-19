@@ -12,7 +12,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::app::{Action, Capability, ContextInfo, TreeNode};
+use crate::app::{ContextInfo, TreeNode};
 
 /// A schema describes a unique InteractionKey definition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

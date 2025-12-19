@@ -15,6 +15,26 @@ export interface SessionInfo {
     lastActiveAt: string;
 }
 export declare const MAX_SESSION_LOGS = 1000;
+export declare const MAX_CHAT_HISTORY = 100;
+/** Chat message role */
+export type ChatRole = 'user' | 'assistant';
+/** Chat message content types */
+export type ChatContent = {
+    type: 'text';
+    text: string;
+} | {
+    type: 'tool_call';
+    name: string;
+    args: unknown;
+    output?: string;
+    status: 'running' | 'success' | 'failed';
+};
+/** A chat message in conversation history */
+export interface ChatMessage {
+    role: ChatRole;
+    content: ChatContent;
+    timestamp: string;
+}
 export interface Session {
     id: string;
     name: string;
@@ -27,6 +47,7 @@ export interface Session {
     lastActiveAt: Date;
     agent?: AgentExecutor;
     logs: string[];
+    chatHistory: ChatMessage[];
 }
 export interface CreateSessionOptions {
     name: string;

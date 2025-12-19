@@ -6,8 +6,9 @@
  */
 import type { VMServiceClient } from '../vm/client.js';
 import type { AgentStreamEvent } from '../ws/protocol.js';
+export declare const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
 export interface AgentConfig {
-    /** Model to use (optional, uses SDK default) */
+    /** Model to use (defaults to claude-haiku-4-5-20251001) */
     model?: string;
     /** Max conversation turns before giving up */
     maxTurns?: number;

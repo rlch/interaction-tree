@@ -4,8 +4,8 @@
 
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
-import type { Session, SessionInfo, CreateSessionOptions } from './types.js';
-import { MAX_SESSION_LOGS } from './types.js';
+import type { Session, SessionInfo, CreateSessionOptions, ChatMessage } from './types.js';
+import { MAX_SESSION_LOGS, MAX_CHAT_HISTORY } from './types.js';
 import { AgentExecutor } from '../agent/index.js';
 
 export class SessionManager extends EventEmitter {
@@ -33,8 +33,9 @@ export class SessionManager extends EventEmitter {
       connectedClients: new Set(),
       createdAt: now,
       lastActiveAt: now,
-      agent: new AgentExecutor({ model: 'claude-haiku-4-20250514' }),  // Create agent for this session
+      agent: new AgentExecutor(),  // Create agent for this session
       logs: [],  // Session-level logs persist across reconnects
+      chatHistory: [],  // Conversation history for TUI
     };
 
     this.sessions.set(id, session);
@@ -182,6 +183,40 @@ export class SessionManager extends EventEmitter {
     const session = this.sessions.get(sessionId);
     if (session) {
       session.logs = [];
+    }
+  }
+
+  /**
+   * Add a chat message to a session's history.
+   */
+  addChatMessage(sessionId: string, message: ChatMessage): void {
+    const session = this.get(sessionId);
+    if (!session) return;
+
+    session.chatHistory.push(message);
+    if (session.chatHistory.length > MAX_CHAT_HISTORY) {
+      session.chatHistory.shift();
+    }
+  }
+
+  /**
+   * Get chat history for a session.
+   */
+  getChatHistory(sessionId: string): ChatMessage[] {
+    const session = this.sessions.get(sessionId);
+    if (!session) return [];
+    return session.chatHistory;
+  }
+
+  /**
+   * Clear chat history for a session.
+   */
+  clearChatHistory(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      session.chatHistory = [];
+      // Also clear the agent session to start fresh conversation
+      session.agent?.clearSession();
     }
   }
 

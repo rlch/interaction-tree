@@ -7,357 +7,13 @@ use crate::project::ProjectInfo;
 use crate::tree_format::CompactTree;
 use crate::ws::protocol::{AgentResponse, AgentStatus, CommandResponse, MonitoringEvent, Session};
 
-/// Actions available for interaction menu
-#[derive(Debug, Clone, PartialEq)]
-pub enum InteractionAction {
-    Tap,
-    LongPress,
-    DoubleTap,
-    Scroll { dx: f64, dy: f64 },
-    EnterText(String),
-    Custom(String),
-}
-
-/// Log viewer mode (vim-like)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum LogViewMode {
-    /// Normal mode - cursor navigation, no selection
-    #[default]
-    Normal,
-    /// Visual line mode (V) - selecting contiguous lines
-    Visual,
-}
-
-/// State for vim-like log viewing with cursor and selection
-#[derive(Debug, Clone, Default)]
-pub struct LogViewState {
-    /// Current cursor line (0-indexed)
-    pub cursor: usize,
-    /// Viewport offset (first visible line)
-    pub scroll: usize,
-    /// Visual mode anchor (line where selection started)
-    pub anchor: Option<usize>,
-    /// Current mode
-    pub mode: LogViewMode,
-}
-
-impl LogViewState {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Get the selection range (start, end) inclusive, sorted
-    pub fn selection_range(&self) -> Option<(usize, usize)> {
-        self.anchor.map(|anchor| {
-            let start = anchor.min(self.cursor);
-            let end = anchor.max(self.cursor);
-            (start, end)
-        })
-    }
-
-    /// Check if a line is selected
-    pub fn is_selected(&self, line: usize) -> bool {
-        match self.mode {
-            LogViewMode::Normal => false,
-            LogViewMode::Visual => {
-                if let Some((start, end)) = self.selection_range() {
-                    line >= start && line <= end
-                } else {
-                    false
-                }
-            }
-        }
-    }
-
-    /// Move cursor up, adjusting scroll if needed
-    pub fn cursor_up(&mut self, viewport_height: usize) {
-        if self.cursor > 0 {
-            self.cursor -= 1;
-            self.ensure_cursor_visible(viewport_height);
-        }
-    }
-
-    /// Move cursor down, adjusting scroll if needed
-    pub fn cursor_down(&mut self, total_lines: usize, viewport_height: usize) {
-        if total_lines > 0 && self.cursor < total_lines - 1 {
-            self.cursor += 1;
-            self.ensure_cursor_visible(viewport_height);
-        }
-    }
-
-    /// Jump to first line
-    pub fn cursor_top(&mut self) {
-        self.cursor = 0;
-        self.scroll = 0;
-    }
-
-    /// Jump to last line
-    pub fn cursor_bottom(&mut self, total_lines: usize, viewport_height: usize) {
-        if total_lines > 0 {
-            self.cursor = total_lines - 1;
-            self.ensure_cursor_visible(viewport_height);
-        }
-    }
-
-    /// Enter visual mode at current cursor
-    pub fn enter_visual(&mut self) {
-        self.mode = LogViewMode::Visual;
-        self.anchor = Some(self.cursor);
-    }
-
-    /// Exit visual mode
-    pub fn exit_visual(&mut self) {
-        self.mode = LogViewMode::Normal;
-        self.anchor = None;
-    }
-
-    /// Toggle visual mode
-    pub fn toggle_visual(&mut self) {
-        match self.mode {
-            LogViewMode::Normal => self.enter_visual(),
-            LogViewMode::Visual => self.exit_visual(),
-        }
-    }
-
-    /// Ensure cursor is visible in viewport
-    pub fn ensure_cursor_visible(&mut self, viewport_height: usize) {
-        if viewport_height == 0 {
-            return;
-        }
-        // Scroll up if cursor is above viewport
-        if self.cursor < self.scroll {
-            self.scroll = self.cursor;
-        }
-        // Scroll down if cursor is below viewport
-        if self.cursor >= self.scroll + viewport_height {
-            self.scroll = self.cursor - viewport_height + 1;
-        }
-    }
-
-    /// Clamp cursor to valid range after log count changes
-    pub fn clamp_cursor(&mut self, total_lines: usize) {
-        if total_lines == 0 {
-            self.cursor = 0;
-            self.scroll = 0;
-        } else {
-            if self.cursor >= total_lines {
-                self.cursor = total_lines - 1;
-            }
-            // Ensure scroll doesn't exceed max valid position
-            let max_scroll = total_lines.saturating_sub(1);
-            if self.scroll > max_scroll {
-                self.scroll = max_scroll;
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct InteractionTree {
-    pub nodes: Vec<TreeNode>,
-    #[allow(dead_code)]
-    pub last_updated: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TreeNode {
-    pub id: String,
-    #[serde(default)]
-    pub widget_type: Option<String>,
-    #[serde(default)]
-    pub children: Vec<TreeNode>,
-    #[serde(default)]
-    pub contexts: Vec<ContextInfo>,
-    #[serde(default)]
-    pub capabilities: Vec<Capability>,
-    #[serde(default)]
-    pub actions: Vec<Action>,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ContextInfo {
-    pub name: String,
-    #[serde(default)]
-    pub description: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Capability {
-    pub name: String,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Action {
-    pub name: String,
-    #[serde(default)]
-    pub description: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WsState {
-    Disconnected,
-    Connecting,
-    Connected,
-}
-
-#[derive(Debug, Clone)]
-pub enum AppStatus {
-    Unknown,
-    Starting,
-    Running {
-        pid: u32,
-        #[allow(dead_code)]
-        uri: String,
-    },
-    Stopped,
-    #[allow(dead_code)]
-    Error(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Mode {
-    Normal,
-    Filter,
-    Help,
-    Confirm(ConfirmAction),
-    SessionPicker,
-    /// Prompt for text input with a specific purpose
-    InputPrompt(InputPromptKind),
-    /// Agent chat input mode (focused on Agent tab)
-    AgentChat,
-    /// Action menu for tree node interactions
-    ActionMenu,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InputPromptKind {
-    CreateSession,
-    /// Run app with device argument (e.g., "macOS", "chrome", device ID)
-    RunApp,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConfirmAction {
-    Quit,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ContentTab {
-    /// Flutter logs (from flutter run process)
-    #[default]
-    Flutter,
-    /// Agent conversation and tool calls
-    Agent,
-    /// Interaction execution history
-    Interactions,
-    /// Interaction tree viewer
-    Tree,
-}
-
-impl ContentTab {
-    pub fn next(self) -> Self {
-        match self {
-            ContentTab::Flutter => ContentTab::Agent,
-            ContentTab::Agent => ContentTab::Interactions,
-            ContentTab::Interactions => ContentTab::Tree,
-            ContentTab::Tree => ContentTab::Flutter,
-        }
-    }
-
-    pub fn prev(self) -> Self {
-        match self {
-            ContentTab::Flutter => ContentTab::Tree,
-            ContentTab::Agent => ContentTab::Flutter,
-            ContentTab::Interactions => ContentTab::Agent,
-            ContentTab::Tree => ContentTab::Interactions,
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            ContentTab::Flutter => "Flutter",
-            ContentTab::Agent => "Agent",
-            ContentTab::Interactions => "Interactions",
-            ContentTab::Tree => "Tree",
-        }
-    }
-}
-
-/// Session-specific state that is preserved when switching between sessions
-#[derive(Debug)]
-pub struct SessionState {
-    /// Flutter logs (from flutter run process)
-    pub flutter_logs: VecDeque<FlutterLogEntry>,
-    /// Agent events (tool calls, responses)
-    pub agent_events: VecDeque<MonitoringEvent>,
-    /// Interaction execution history (taps, scrolls, etc.)
-    pub interaction_logs: VecDeque<LogEntry>,
-
-    /// Chat messages for the Agent pane
-    pub chat_messages: Vec<crate::chat::ChatMessage>,
-    /// Current streaming response from agent
-    pub chat_streaming: Option<crate::chat::StreamingState>,
-    /// Composer text input
-    pub chat_input: String,
-    /// Cursor position in chat input
-    pub chat_cursor: usize,
-
-    pub tree: Option<InteractionTree>,
-    pub tree_state: TreeState<String>,
-
-    pub conversation_id: Option<String>,
-    pub agent_question: Option<String>,
-    pub pending_response: bool,
-    pub pending_intent: Option<String>,
-    pub last_agent_error: Option<String>,
-
-    /// Maximum events to keep per log type
-    max_events: usize,
-}
-
-impl SessionState {
-    pub fn new(max_events: usize) -> Self {
-        Self {
-            flutter_logs: VecDeque::with_capacity(max_events),
-            agent_events: VecDeque::with_capacity(max_events),
-            interaction_logs: VecDeque::with_capacity(max_events),
-            chat_messages: Vec::new(),
-            chat_streaming: None,
-            chat_input: String::new(),
-            chat_cursor: 0,
-            tree: None,
-            tree_state: TreeState::default(),
-            conversation_id: None,
-            agent_question: None,
-            pending_response: false,
-            pending_intent: None,
-            last_agent_error: None,
-            max_events,
-        }
-    }
-
-    /// Clear all session-specific data
-    pub fn clear(&mut self) {
-        self.flutter_logs.clear();
-        self.agent_events.clear();
-        self.interaction_logs.clear();
-        self.chat_messages.clear();
-        self.chat_streaming = None;
-        self.chat_input.clear();
-        self.chat_cursor = 0;
-        self.tree = None;
-        self.tree_state = TreeState::default();
-        self.conversation_id = None;
-        self.agent_question = None;
-        self.pending_response = false;
-        self.pending_intent = None;
-        self.last_agent_error = None;
-    }
-}
+// Re-export types for backward compatibility with existing code
+pub use crate::session::SessionState;
+pub use crate::types::{
+    AppStatus, ConfirmAction, ContentTab, ContextInfo, InputPromptKind,
+    InteractionAction, InteractionTree, LogEntry, LogLevel, LogViewMode, LogViewState, Mode,
+    Toast, ToastLevel, TreeNode, WsState,
+};
 
 pub struct App {
     pub ws_state: WsState,
@@ -408,66 +64,6 @@ pub struct App {
     pub toast_ttl_secs: u64,
 
     pub should_quit: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct LogEntry {
-    pub ts: String,
-    pub level: LogLevel,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LogLevel {
-    Debug,
-    Info,
-    Warning,
-    Error,
-}
-
-#[derive(Debug, Clone)]
-pub struct Toast {
-    pub message: String,
-    pub level: ToastLevel,
-    pub created_at: std::time::Instant,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToastLevel {
-    Info,
-    Success,
-    Warning,
-    Error,
-}
-
-impl Toast {
-    pub fn error(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            level: ToastLevel::Error,
-            created_at: std::time::Instant::now(),
-        }
-    }
-
-    pub fn success(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            level: ToastLevel::Success,
-            created_at: std::time::Instant::now(),
-        }
-    }
-
-    pub fn info(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            level: ToastLevel::Info,
-            created_at: std::time::Instant::now(),
-        }
-    }
-
-    pub fn is_expired(&self, ttl_secs: u64) -> bool {
-        self.created_at.elapsed().as_secs() >= ttl_secs
-    }
 }
 
 impl App {
@@ -797,7 +393,7 @@ impl App {
                 return;
             }
 
-            // Check if this is a session creation response
+            // Check if this is a session creation/connection response
             if let Some(session) = resp.data.get("session") {
                 match serde_json::from_value::<Session>(session.clone()) {
                     Ok(parsed) => {
@@ -810,7 +406,17 @@ impl App {
                         self.switch_to_session(session_id);
                         self.session_picker_index = self.sessions.len().saturating_sub(1);
                         self.mode = Mode::Normal;
-                        self.push_toast(Toast::success("Session created"));
+                        
+                        // Load chat history if present (for reconnecting to existing session)
+                        if let Some(chat_history) = resp.data.get("chatHistory") {
+                            let messages = crate::chat::parse_chat_history(chat_history);
+                            if !messages.is_empty() {
+                                tracing::info!("Loaded {} chat messages from session", messages.len());
+                                self.session.chat_messages = messages;
+                            }
+                        }
+                        
+                        self.push_toast(Toast::success("Session connected"));
                     }
                     Err(e) => {
                         tracing::error!(?e, ?session, "Failed to parse session response");

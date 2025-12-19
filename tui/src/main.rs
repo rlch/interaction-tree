@@ -6,8 +6,10 @@ mod event;
 mod flutter_log;
 mod markdown;
 mod project;
+mod session;
 mod theme;
 mod tree_format;
+pub mod types;
 mod ui;
 mod ws;
 

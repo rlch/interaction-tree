@@ -6,6 +6,7 @@
  */
 import { query, createSdkMcpServer, tool, } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
+export const DEFAULT_MODEL = 'claude-haiku-4-5-20251001';
 /**
  * Parse ASK_CONTEXT pattern from assistant response.
  * More robust parsing: case-insensitive, handles multiline.
@@ -234,10 +235,9 @@ export async function executeAgent(systemPrompt, userMessage, config, vmClient, 
         ],
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
+        includePartialMessages: true, // Enable streaming
     };
-    if (config.model) {
-        options.model = config.model;
-    }
+    options.model = config.model ?? DEFAULT_MODEL;
     if (config.resume) {
         options.resume = config.resume;
     }
@@ -249,11 +249,18 @@ export async function executeAgent(systemPrompt, userMessage, config, vmClient, 
             if (message.type === 'system' && message.subtype === 'init') {
                 sessionId = message.session_id;
             }
+            // Handle streaming partial messages (text deltas)
+            if (message.type === 'stream_event') {
+                const evt = message.event;
+                if (evt.type === 'content_block_delta' && evt.delta.type === 'text_delta') {
+                    onEvent?.({ event: { kind: 'text_delta', text: evt.delta.text } });
+                }
+            }
             if (message.type === 'assistant') {
                 for (const block of message.message.content) {
                     if (block.type === 'text') {
                         textBlocks.push(block.text);
-                        onEvent?.({ event: { kind: 'text_delta', text: block.text } });
+                        // Don't emit text_delta here since we already streamed it via stream_event
                     }
                     else if (block.type === 'tool_use') {
                         onEvent?.({ event: { kind: 'tool_call_start', toolName: block.name, toolCallId: block.id } });

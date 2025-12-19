@@ -2,7 +2,7 @@
  * SessionManager - manages sessions shared across all daemon clients.
  */
 import { EventEmitter } from 'events';
-import type { Session, SessionInfo, CreateSessionOptions } from './types.js';
+import type { Session, SessionInfo, CreateSessionOptions, ChatMessage } from './types.js';
 export declare class SessionManager extends EventEmitter {
     private sessions;
     /**
@@ -57,6 +57,18 @@ export declare class SessionManager extends EventEmitter {
      * Clear logs for a session.
      */
     clearLogs(sessionId: string): void;
+    /**
+     * Add a chat message to a session's history.
+     */
+    addChatMessage(sessionId: string, message: ChatMessage): void;
+    /**
+     * Get chat history for a session.
+     */
+    getChatHistory(sessionId: string): ChatMessage[];
+    /**
+     * Clear chat history for a session.
+     */
+    clearChatHistory(sessionId: string): void;
     private toInfo;
 }
 //# sourceMappingURL=manager.d.ts.map
