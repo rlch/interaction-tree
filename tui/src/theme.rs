@@ -52,6 +52,10 @@ pub struct Theme {
     pub source_vm: Color,
     pub source_mcp: Color,
     pub source_tree: Color,
+
+    // Cursor and selection (for vim-like log navigation)
+    pub cursor_bg: Color,
+    pub selection_bg: Color,
 }
 
 impl Theme {
@@ -105,6 +109,16 @@ impl Theme {
             source_vm: Color::Yellow,
             source_mcp: Color::Cyan,
             source_tree: Color::Magenta,
+
+            // Cursor and selection colors
+            cursor_bg: match mode {
+                ThemeMode::Dark => Color::Rgb(60, 60, 80),
+                ThemeMode::Light => Color::Rgb(200, 200, 220),
+            },
+            selection_bg: match mode {
+                ThemeMode::Dark => Color::Rgb(50, 70, 90),
+                ThemeMode::Light => Color::Rgb(180, 200, 220),
+            },
         }
     }
 
