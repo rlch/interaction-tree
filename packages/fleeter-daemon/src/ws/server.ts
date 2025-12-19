@@ -587,11 +587,11 @@ export class DaemonServer {
             });
             log.agent.info({ sessionId, status: result.status }, 'Agent execute completed');
 
-            // Store final assistant text response if any
-            if (textBuffer.trim() || result.summary) {
+            // Store final assistant text only if not already saved on task_complete
+            if (textBuffer.trim()) {
               this.sessionManager.addChatMessage(sessionId, {
                 role: 'assistant',
-                content: { type: 'text', text: textBuffer.trim() || result.summary || '' },
+                content: { type: 'text', text: textBuffer.trim() },
                 timestamp: new Date().toISOString(),
               });
             }
