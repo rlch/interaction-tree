@@ -165,11 +165,21 @@ export class SessionManager extends EventEmitter {
     }
     /**
      * Add a chat message to a session's history.
+     * Deduplicates identical consecutive messages from the same role.
      */
     addChatMessage(sessionId, message) {
         const session = this.get(sessionId);
         if (!session)
             return;
+        // Deduplicate: skip if last message has same role and content
+        const last = session.chatHistory[session.chatHistory.length - 1];
+        if (last && last.role === message.role) {
+            const lastContent = JSON.stringify(last.content);
+            const newContent = JSON.stringify(message.content);
+            if (lastContent === newContent) {
+                return; // Skip duplicate
+            }
+        }
         session.chatHistory.push(message);
         if (session.chatHistory.length > MAX_CHAT_HISTORY) {
             session.chatHistory.shift();

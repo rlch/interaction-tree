@@ -59,6 +59,7 @@ export declare class SessionManager extends EventEmitter {
     clearLogs(sessionId: string): void;
     /**
      * Add a chat message to a session's history.
+     * Deduplicates identical consecutive messages from the same role.
      */
     addChatMessage(sessionId: string, message: ChatMessage): void;
     /**
