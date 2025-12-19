@@ -104,7 +104,7 @@ impl LogViewState {
         }
     }
 
-    fn ensure_cursor_visible(&mut self, viewport_height: usize) {
+    pub fn ensure_cursor_visible(&mut self, viewport_height: usize) {
         if viewport_height == 0 {
             return;
         }
@@ -703,10 +703,30 @@ impl App {
     }
 
     pub fn push_flutter_log(&mut self, entry: FlutterLogEntry) {
+        // Check if cursor is at the bottom before adding (for auto-follow)
+        let was_at_bottom = self.session.flutter_logs.is_empty()
+            || self.log_view.cursor >= self.session.flutter_logs.len().saturating_sub(1);
+
         if self.session.flutter_logs.len() >= self.max_events {
             self.session.flutter_logs.pop_front();
+            // Adjust cursor if we removed an entry above it
+            if self.log_view.cursor > 0 {
+                self.log_view.cursor = self.log_view.cursor.saturating_sub(1);
+            }
+            if self.log_view.scroll > 0 {
+                self.log_view.scroll = self.log_view.scroll.saturating_sub(1);
+            }
         }
         self.session.flutter_logs.push_back(entry);
+
+        // Auto-follow: move cursor to new bottom if it was at the bottom
+        if was_at_bottom {
+            let new_count = self.session.flutter_logs.len();
+            if new_count > 0 {
+                self.log_view.cursor = new_count - 1;
+                self.log_view.ensure_cursor_visible(self.log_viewport_height);
+            }
+        }
     }
 
     pub fn push_agent_event(&mut self, event: MonitoringEvent) {
