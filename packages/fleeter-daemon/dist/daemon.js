@@ -69,19 +69,19 @@ export class Daemon {
     }
     async start() {
         if (this.running) {
-            console.error('[daemon] Already running');
+            log.daemon.warn('Already running');
             return;
         }
         this.server.start({ port: this.config.port, host: this.config.host });
         this.running = true;
         process.on('SIGINT', () => this.shutdown('SIGINT'));
         process.on('SIGTERM', () => this.shutdown('SIGTERM'));
-        console.error(`[daemon] Fleeter daemon started (PID: ${process.pid})`);
+        log.daemon.info({ pid: process.pid, port: this.config.port }, 'Fleeter daemon started');
     }
     async shutdown(signal) {
         if (!this.running)
             return;
-        console.error(`[daemon] Shutting down${signal ? ` (${signal})` : ''}...`);
+        log.daemon.info({ signal }, 'Shutting down');
         // Stop all Flutter processes
         await this.flutterManager.stopAll();
         // Disconnect all VM clients
@@ -90,7 +90,7 @@ export class Daemon {
         }
         this.server.stop();
         this.running = false;
-        console.error('[daemon] Shutdown complete');
+        log.daemon.info('Shutdown complete');
         process.exit(0);
     }
     getSessionManager() {

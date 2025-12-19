@@ -18,6 +18,7 @@ import { isClientHello, isCommandMessage, isAgentToolCall } from './protocol.js'
 import type { SessionManager } from '../session/index.js';
 import type { FlutterProcessManager } from '../flutter/index.js';
 import type { VMServiceClient } from '../vm/index.js';
+import { log } from '../logger.js';
 
 const DAEMON_VERSION = '0.1.0';
 
@@ -49,7 +50,7 @@ export class DaemonServer {
     const { port, host = '127.0.0.1' } = config;
 
     if (this.wss) {
-      console.error('[daemon] WebSocket server already running');
+      log.ws.warn('WebSocket server already running');
       return;
     }
 
@@ -57,23 +58,23 @@ export class DaemonServer {
 
     this.wss.on('connection', (ws) => {
       const tempId = uuidv4();
-      console.error(`[daemon] New connection (temp id: ${tempId})`);
+      log.ws.debug({ tempId }, 'New connection');
 
       ws.on('message', async (data) => {
         try {
           const msg = JSON.parse(data.toString()) as ClientMessage;
           await this.handleMessage(msg, ws, tempId);
         } catch (err) {
-          console.error(`[daemon] Error handling message: ${err}`);
+          log.ws.error({ err }, 'Error handling message');
           this.sendError(ws, 'unknown', err instanceof Error ? err.message : String(err));
         }
       });
 
       ws.on('close', () => this.handleDisconnect(tempId));
-      ws.on('error', (err) => console.error(`[daemon] WebSocket error: ${err.message}`));
+      ws.on('error', (err) => log.ws.error({ err: err.message }, 'WebSocket error'));
     });
 
-    console.error(`[daemon] WebSocket server listening on ws://${host}:${port}`);
+    log.ws.info({ host, port }, 'WebSocket server listening');
   }
 
   stop(): void {
@@ -83,7 +84,7 @@ export class DaemonServer {
       }
       this.wss.close();
       this.wss = null;
-      console.error('[daemon] WebSocket server stopped');
+      log.ws.info('WebSocket server stopped');
     }
   }
 
@@ -108,7 +109,7 @@ export class DaemonServer {
     };
 
     this.clients.set(msg.clientId, { client, ws });
-    console.error(`[daemon] Client registered: ${msg.clientId} (${msg.clientType})`);
+    log.ws.info({ clientId: msg.clientId, clientType: msg.clientType }, 'Client registered');
 
     const sessions = this.sessionManager.list();
     const response: ServerHello = {
@@ -193,10 +194,7 @@ export class DaemonServer {
             }
           }
           
-          // Send chat history to the connecting client
-          const chatHistory = this.sessionManager.getChatHistory(sessionId);
-          
-          sendResponse({ success: true, data: { session, chatHistory } });
+          sendResponse({ success: true, data: { session } });
           break;
         }
 
@@ -372,75 +370,30 @@ export class DaemonServer {
         }
 
         case 'agent_message': {
-          console.error(`[daemon] Received agent_message from ${clientId}`);
+          log.agent.debug({ clientId }, 'Received agent_message');
           const clientEntry = this.clients.get(clientId);
           const sessionId = clientEntry?.client.currentSessionId;
-          console.error(`[daemon] sessionId: ${sessionId}`);
+          log.agent.debug({ sessionId }, 'Session ID');
           if (!sessionId) {
-            console.error(`[daemon] No session connected`);
+            log.agent.warn('No session connected');
             sendResponse({ success: false, error: NO_SESSION_ERROR });
             return;
           }
           const session = this.sessionManager.get(sessionId);
-          console.error(`[daemon] session: ${session?.id}, agent: ${!!session?.agent}`);
+          log.agent.debug({ sessionId: session?.id, hasAgent: !!session?.agent }, 'Session info');
           if (!session?.agent) {
-            console.error(`[daemon] No agent for session`);
+            log.agent.warn({ sessionId }, 'No agent for session');
             sendResponse({ success: false, error: 'No agent for session' });
             return;
           }
           const { intent } = data as { intent: string };
-          console.error(`[daemon] intent: ${intent}`);
-
-          // Store user message in chat history
-          this.sessionManager.addChatMessage(sessionId, {
-            role: 'user',
-            content: { type: 'text', text: intent },
-            timestamp: new Date().toISOString(),
-          });
+          log.agent.info({ sessionId, intent }, 'Processing agent intent');
 
           const vmClient = this.vmClients.get(sessionId);
-          console.error(`[daemon] vmClient: ${!!vmClient}`);
-
-          // Track text and tool calls for chat history
-          let textBuffer = '';
-          const pendingToolCalls = new Map<string, { name: string; args: unknown; timestamp: string }>();
+          log.agent.debug({ hasVmClient: !!vmClient }, 'VM client status');
 
           const onEvent = (partialEvent: Omit<AgentStreamEvent, 'type' | 'id' | 'sessionId'>) => {
-            console.error(`[daemon] onEvent: ${JSON.stringify(partialEvent.event)}`);
-            const evt = partialEvent.event;
-
-            // Track text for chat history
-            if (evt.kind === 'text_delta') {
-              textBuffer += evt.text;
-            }
-
-            // Track tool calls for chat history
-            if (evt.kind === 'tool_call_start') {
-              pendingToolCalls.set(evt.toolCallId, {
-                name: evt.toolName,
-                args: {},
-                timestamp: new Date().toISOString(),
-              });
-            }
-
-            if (evt.kind === 'tool_call_end') {
-              const pending = pendingToolCalls.get(evt.toolCallId);
-              if (pending) {
-                // Store completed tool call in chat history
-                this.sessionManager.addChatMessage(sessionId, {
-                  role: 'assistant',
-                  content: {
-                    type: 'tool_call',
-                    name: pending.name,
-                    args: pending.args,
-                    output: evt.result,
-                    status: 'success',
-                  },
-                  timestamp: pending.timestamp,
-                });
-                pendingToolCalls.delete(evt.toolCallId);
-              }
-            }
+            log.agent.trace({ event: partialEvent.event }, 'Agent event');
 
             const streamEvent: AgentStreamEvent = {
               type: 'agent_stream',
@@ -454,8 +407,7 @@ export class DaemonServer {
           };
 
           try {
-            console.error(`[daemon] Calling agent.execute...`);
-            // AgentExecutor maintains its own Claude SDK session ID internally
+            log.agent.debug({ sessionId }, 'Calling agent.execute');
             const result = await session.agent.execute({
               intent,
               vmClient,
@@ -463,16 +415,7 @@ export class DaemonServer {
               cwd: session.projectPath,
               onEvent,
             });
-            console.error(`[daemon] agent.execute result: ${JSON.stringify(result)}`);
-
-            // Store final assistant text response if any
-            if (textBuffer.trim() || result.summary) {
-              this.sessionManager.addChatMessage(sessionId, {
-                role: 'assistant',
-                content: { type: 'text', text: textBuffer.trim() || result.summary || '' },
-                timestamp: new Date().toISOString(),
-              });
-            }
+            log.agent.info({ sessionId, status: result.status }, 'Agent execute completed');
 
             const response = {
               type: 'agent_response',
@@ -483,9 +426,10 @@ export class DaemonServer {
               question: result.question,
               sdkSessionId: result.sessionId,
             };
-            console.error(`[daemon] Sending response: ${JSON.stringify(response)}`);
+            log.agent.debug({ responseType: response.type, status: response.status }, 'Sending response');
             ws.send(JSON.stringify(response));
           } catch (err) {
+            log.agent.error({ err, sessionId }, 'Agent execute failed');
             ws.send(JSON.stringify({
               type: 'agent_response',
               id,
@@ -507,7 +451,7 @@ export class DaemonServer {
   private handleDisconnect(clientIdOrTemp: string): void {
     const clientEntry = this.clients.get(clientIdOrTemp);
     if (clientEntry) {
-      console.error(`[daemon] Client disconnected: ${clientEntry.client.id}`);
+      log.ws.info({ clientId: clientEntry.client.id }, 'Client disconnected');
       this.sessionManager.disconnectClientFromAll(clientEntry.client.id);
       this.clients.delete(clientIdOrTemp);
     }
