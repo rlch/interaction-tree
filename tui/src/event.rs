@@ -195,22 +195,41 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>)
             app.should_quit = true;
         }
         KeyCode::Char('r') => {
-            if app.is_app_running() {
-                if let Some(client) = ws {
-                    let msg = OutgoingMessage::Command {
-                        id: Uuid::new_v4().to_string(),
-                        client_id: client.client_id().to_string(),
-                        action: "hot_reload".to_string(),
-                        key: None,
-                        data: None,
-                    };
-                    let _ = client.send(msg).await;
-                    app.push_toast(crate::app::Toast::info("Hot reload triggered"));
+            if on_tree_tab {
+                // Refresh tree on Tree tab
+                if app.is_app_running() {
+                    if let Some(client) = ws {
+                        let msg = OutgoingMessage::Command {
+                            id: Uuid::new_v4().to_string(),
+                            client_id: client.client_id().to_string(),
+                            action: "get_tree".to_string(),
+                            key: None,
+                            data: None,
+                        };
+                        let _ = client.send(msg).await;
+                        app.push_toast(crate::app::Toast::info("Tree refresh triggered"));
+                    }
+                }
+            } else if app.content_tab == ContentTab::Flutter {
+                // Hot reload on Flutter tab
+                if app.is_app_running() {
+                    if let Some(client) = ws {
+                        let msg = OutgoingMessage::Command {
+                            id: Uuid::new_v4().to_string(),
+                            client_id: client.client_id().to_string(),
+                            action: "hot_reload".to_string(),
+                            key: None,
+                            data: None,
+                        };
+                        let _ = client.send(msg).await;
+                        app.push_toast(crate::app::Toast::info("Hot reload triggered"));
+                    }
                 }
             }
         }
         KeyCode::Char('R') => {
-            if app.is_app_running() {
+            // Hot restart only on Flutter tab
+            if app.content_tab == ContentTab::Flutter && app.is_app_running() {
                 if let Some(client) = ws {
                     let msg = OutgoingMessage::Command {
                         id: Uuid::new_v4().to_string(),
@@ -223,6 +242,13 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>)
                     app.push_toast(crate::app::Toast::info("Hot restart triggered"));
                 }
             }
+        }
+        // Tree-specific: expand/collapse all
+        KeyCode::Char('e') if on_tree_tab => {
+            app.tree_expand_all();
+        }
+        KeyCode::Char('E') if on_tree_tab => {
+            app.tree_collapse_all();
         }
         KeyCode::Char('/') => {
             app.mode = Mode::Filter;
@@ -314,16 +340,16 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>)
         KeyCode::Char('s') => {
             app.mode = Mode::SessionPicker;
         }
-        // Run app (play) - show device prompt
+        // Run app (play) - show device prompt (Flutter tab only)
         KeyCode::Char('p') => {
-            if !app.is_app_running() && app.has_session() {
+            if app.content_tab == ContentTab::Flutter && !app.is_app_running() && app.has_session() {
                 app.mode = Mode::InputPrompt(InputPromptKind::RunApp);
                 app.input_buffer.clear();
             }
         }
-        // Stop app
+        // Stop app (Flutter tab only)
         KeyCode::Char('x') => {
-            if app.is_app_running() {
+            if app.content_tab == ContentTab::Flutter && app.is_app_running() {
                 if let Some(client) = ws {
                     let msg = OutgoingMessage::Command {
                         id: Uuid::new_v4().to_string(),
