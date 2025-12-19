@@ -1,137 +1,98 @@
 use crate::app::{App, WsState};
 use crate::theme::theme;
 use ratatui::{
-    layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::Paragraph,
-    Frame,
+    text::Span,
 };
 use throbber_widgets_tui::ThrobberState;
 
-pub fn render(frame: &mut Frame, app: &App, area: Rect) {
-    // Guard against zero-width areas
-    if area.width == 0 {
-        return;
-    }
-    
+/// Build status spans to be shown on the right side of the tab bar.
+/// Returns (spans, total_width)
+pub fn build_status_spans(app: &App) -> (Vec<Span<'static>>, usize) {
     let t = theme();
-
     let sep = Span::styled(" │ ", Style::default().fg(t.text_dim));
+    let mut spans: Vec<Span<'static>> = vec![];
 
-    // === RIGHT SIDE (calculate first to know remaining space) ===
-    let mut right_spans: Vec<Span> = vec![];
+    // If disconnected from daemon, just show "Disconnected"
+    if app.ws_state == WsState::Disconnected {
+        spans.push(Span::styled(
+            "Disconnected",
+            Style::default().fg(t.error),
+        ));
+        spans.push(Span::raw(" "));
+        let width = spans.iter().map(|s| s.content.len()).sum();
+        return (spans, width);
+    }
 
     // Throbber when pending response or connecting
     if app.session.pending_response || app.ws_state == WsState::Connecting {
         let throbber_spans = render_throbber(&app.throbber_state);
-        right_spans.extend(throbber_spans);
-        right_spans.push(Span::raw(" "));
+        spans.extend(throbber_spans);
+        spans.push(Span::raw(" "));
     }
 
-    // Connection status
-    match app.ws_state {
-        WsState::Connected => {
-            right_spans.push(Span::styled("Connected", Style::default().fg(t.success)));
-        }
-        WsState::Connecting => {
-            right_spans.push(Span::styled(
-                "Connecting",
-                Style::default()
-                    .fg(t.warning)
-                    .add_modifier(Modifier::ITALIC),
-            ));
-        }
-        WsState::Disconnected => {
-            right_spans.push(Span::styled("Disconnected", Style::default().fg(t.error)));
-        }
-    };
-    right_spans.push(Span::raw(" "));
+    // Show "Connecting" status
+    if app.ws_state == WsState::Connecting {
+        spans.push(Span::styled(
+            "Connecting",
+            Style::default()
+                .fg(t.warning)
+                .add_modifier(Modifier::ITALIC),
+        ));
+        spans.push(Span::raw(" "));
+        let width = spans.iter().map(|s| s.content.len()).sum();
+        return (spans, width);
+    }
 
-    let right_width: usize = right_spans.iter().map(|s| s.content.len()).sum();
-    let left_max_width = (area.width as usize).saturating_sub(right_width + 1);
+    // Connected: show project | session | app status
+    spans.push(Span::styled(
+        app.project.name.clone(),
+        Style::default().fg(t.info),
+    ));
 
-    // === LEFT SIDE ===
-    let mut left_spans = vec![
-        Span::raw(" "),
-        Span::styled(
-            truncate(&app.project.name, 20),
-            Style::default().fg(t.info),
-        ),
-    ];
-
-    // Selected session - use current_session() as single source of truth
+    // Selected session and app status from Session struct
     if let Some(session) = app.current_session() {
-        left_spans.push(sep.clone());
-        left_spans.push(Span::styled(
+        spans.push(sep.clone());
+        spans.push(Span::styled(
             format!("@{}", truncate(&session.name, 12)),
             Style::default().fg(t.source_tree),
         ));
 
-        // Show app status from Session struct (single source of truth)
+        // App status from session
         match session.app_status.as_str() {
             "running" => {
-                left_spans.push(sep.clone());
                 if let Some(pid) = session.pid {
-                    left_spans.push(Span::styled(
+                    spans.push(sep.clone());
+                    spans.push(Span::styled(
                         format!("pid {}", pid),
                         Style::default().fg(t.success),
                     ));
-                } else {
-                    left_spans.push(Span::styled(
-                        "running",
-                        Style::default().fg(t.success),
-                    ));
-                }
-                // Only show URI if we have space (calculate current length)
-                let current_len: usize = left_spans.iter().map(|s| s.content.len()).sum();
-                if let Some(uri) = &session.vm_service_uri {
-                    if !uri.is_empty() {
-                        let remaining = left_max_width.saturating_sub(current_len + 1);
-                        if remaining > 10 {
-                            left_spans.push(Span::raw(" "));
-                            left_spans.push(Span::styled(
-                                truncate(uri, remaining),
-                                Style::default().fg(t.text_dim),
-                            ));
-                        }
-                    }
                 }
             }
             "starting" => {
-                left_spans.push(sep.clone());
-                left_spans.push(Span::styled(
+                spans.push(sep.clone());
+                spans.push(Span::styled(
                     "starting…",
                     Style::default()
                         .fg(t.warning)
                         .add_modifier(Modifier::ITALIC),
                 ));
             }
-            "stopped" | "not_running" => {
-                left_spans.push(sep.clone());
-                left_spans.push(Span::styled("stopped", Style::default().fg(t.error)));
+            "stopped" => {
+                spans.push(sep.clone());
+                spans.push(Span::styled("stopped", Style::default().fg(t.error)));
             }
             "error" => {
-                left_spans.push(sep.clone());
-                left_spans.push(Span::styled("error", Style::default().fg(t.error)));
+                spans.push(sep);
+                spans.push(Span::styled("error", Style::default().fg(t.error)));
             }
-            _ => {}
+            _ => {} // not_running, unknown
         }
     }
 
-    // Calculate widths - ensure right_width doesn't exceed area
-    let right_width = right_width.min(area.width as usize);
-    let layout = Layout::horizontal([
-        Constraint::Min(0),
-        Constraint::Length(right_width as u16),
-    ])
-    .split(area);
-
-    let left_line = Line::from(left_spans);
-    let right_line = Line::from(right_spans);
-
-    frame.render_widget(Paragraph::new(left_line), layout[0]);
-    frame.render_widget(Paragraph::new(right_line), layout[1]);
+    spans.push(Span::raw(" "));
+    let width = spans.iter().map(|s| s.content.len()).sum();
+    (spans, width)
 }
 
 fn render_throbber(state: &ThrobberState) -> Vec<Span<'static>> {

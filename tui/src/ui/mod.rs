@@ -1,4 +1,3 @@
-mod action_menu;
 mod agent_pane;
 mod completion_popup;
 mod flutter_pane;
@@ -13,32 +12,23 @@ mod tree_pane;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Tabs;
+use ratatui::widgets::{Paragraph, Tabs};
 use ratatui::Frame;
 
 use crate::app::{App, ContentTab, Mode};
 use crate::theme::theme;
 
 pub fn render(frame: &mut Frame, app: &mut App) {
-    let area = frame.area();
-
-    // Guard against zero-size terminal
-    if area.width < 10 || area.height < 5 {
-        return;
-    }
-
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // status bar
-            Constraint::Min(3),    // main content area
+            Constraint::Min(3),    // main content area (includes tab bar)
             Constraint::Length(1), // help bar
         ])
-        .split(area);
+        .split(frame.area());
 
-    status_bar::render(frame, app, chunks[0]);
-    render_content_with_tabs(frame, app, chunks[1]);
-    help_bar::render(frame, app, chunks[2]);
+    render_content_with_tabs(frame, app, chunks[0]);
+    help_bar::render(frame, app, chunks[1]);
 
     // Overlays
     if matches!(app.mode, Mode::Help) {
@@ -49,32 +39,35 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         session_picker::render(frame, app);
     }
 
-    if matches!(app.mode, Mode::ActionMenu) {
-        action_menu::render(frame, app);
-    }
-
     // Toasts (always on top)
     toasts::render(frame, app);
 }
 
 fn render_content_with_tabs(frame: &mut Frame, app: &mut App, area: Rect) {
-    // Guard against zero-size areas
-    if area.width < 5 || area.height < 2 {
-        return;
-    }
-
     let t = theme();
 
     // Split area for tab bar and content
     let content_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // tab bar
+            Constraint::Length(1), // tab bar + status (same line)
             Constraint::Min(1),    // content pane
         ])
         .split(area);
 
-    // Render tab bar
+    // Build status spans for the right side
+    let (status_spans, status_width) = status_bar::build_status_spans(app);
+
+    // Split tab bar area: tabs on left, status on right
+    let tab_bar_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(status_width as u16),
+        ])
+        .split(content_chunks[0]);
+
+    // Render tab bar on the left
     let tab_titles: Vec<Line> = [
         ContentTab::Flutter,
         ContentTab::Agent,
@@ -108,7 +101,11 @@ fn render_content_with_tabs(frame: &mut Frame, app: &mut App, area: Rect) {
         .highlight_style(Style::default().fg(t.title).add_modifier(Modifier::BOLD))
         .divider(Span::styled(" │ ", Style::default().fg(t.text_dim)));
 
-    frame.render_widget(tabs, content_chunks[0]);
+    frame.render_widget(tabs, tab_bar_chunks[0]);
+
+    // Render status on the right
+    let status_line = Line::from(status_spans);
+    frame.render_widget(Paragraph::new(status_line), tab_bar_chunks[1]);
 
     // Render active pane
     match app.content_tab {
