@@ -4,9 +4,20 @@ use crate::theme::theme;
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::Style,
-    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
     Frame,
 };
+use unicode_width::UnicodeWidthStr;
+
+/// Calculate how many visual lines a log entry will take when wrapped
+fn wrapped_height(entry: &FlutterLogEntry, width: usize) -> usize {
+    if width == 0 {
+        return 1;
+    }
+    let text = entry.to_plain_text();
+    let text_width = UnicodeWidthStr::width(text.as_str());
+    ((text_width + width - 1) / width).max(1)
+}
 
 pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
     // Guard against zero-size areas
@@ -78,20 +89,26 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(block, area);
 
     let content_area = chunks[0];
+    let content_width = content_area.width as usize;
 
-    // Render each line manually with full-width background for highlighted lines
-    for (row, (idx, entry)) in logs
-        .iter()
-        .enumerate()
-        .skip(visible_start)
-        .take(inner_height)
-        .enumerate()
-    {
+    // Render each log entry with wrapping support
+    let mut current_y = content_area.y;
+    let max_y = content_area.y + content_area.height;
+
+    for (idx, entry) in logs.iter().enumerate().skip(visible_start) {
+        if current_y >= max_y {
+            break;
+        }
+
+        let entry_height = wrapped_height(entry, content_width);
+        let available_height = (max_y - current_y) as usize;
+        let render_height = entry_height.min(available_height);
+
         let line_area = Rect {
             x: content_area.x,
-            y: content_area.y + row as u16,
+            y: current_y,
             width: content_area.width,
-            height: 1,
+            height: render_height as u16,
         };
 
         let is_cursor_line = idx == cursor;
@@ -110,21 +127,26 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
             None
         };
 
-        // Fill full line with background first if highlighted
+        // Fill full area with background first if highlighted
         if let Some(style) = bg_style {
             let buf = frame.buffer_mut();
-            for x in line_area.x..line_area.x + line_area.width {
-                buf[(x, line_area.y)].set_style(style);
+            for y in line_area.y..line_area.y + line_area.height {
+                for x in line_area.x..line_area.x + line_area.width {
+                    buf[(x, y)].set_style(style);
+                }
             }
         }
 
-        // Render the line content on top
+        // Render the line content with wrapping
         let line = entry.to_line();
-        frame.render_widget(Paragraph::new(line), line_area);
+        let paragraph = Paragraph::new(line).wrap(Wrap { trim: false });
+        frame.render_widget(paragraph, line_area);
+
+        current_y += render_height as u16;
     }
 
     // Render scrollbar
-    if log_count > inner_height {
+    if log_count > 0 {
         let mut scrollbar_state = ScrollbarState::new(log_count).position(cursor);
 
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)

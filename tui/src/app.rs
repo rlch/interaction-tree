@@ -1101,7 +1101,7 @@ impl App {
 
     pub fn handle_agent_stream_event(&mut self, event: crate::ws::protocol::AgentStreamEvent) {
         use crate::ws::protocol::AgentEventKind;
-        use crate::chat::{ChatMessage, ToolCall, ToolStatus, StreamingState};
+        use crate::chat::{ChatMessage, ChatContent, ToolCall, ToolStatus, StreamingState};
         
         // Ensure we have streaming state
         if self.session.chat_streaming.is_none() {
@@ -1115,46 +1115,56 @@ impl App {
                 }
             }
             AgentEventKind::ToolCallStart { tool_name, tool_call_id } => {
-                if let Some(streaming) = &mut self.session.chat_streaming {
-                    streaming.tool_calls.push(ToolCall {
-                        id: tool_call_id,
-                        name: tool_name,
-                        args: serde_json::Value::Null,
-                        status: ToolStatus::Running,
-                        output: None,
-                    });
-                }
+                // Flush any pending text before adding tool call
+                self.flush_streaming_text();
+                
+                // Add tool call as its own message (inline with the conversation)
+                let tool_call = ToolCall {
+                    id: tool_call_id,
+                    name: tool_name,
+                    args: serde_json::Value::Null,
+                    status: ToolStatus::Running,
+                    output: None,
+                };
+                self.session.chat_messages.push(ChatMessage::assistant_tool(tool_call));
             }
             AgentEventKind::ToolCallEnd { tool_call_id, result, .. } => {
-                if let Some(streaming) = &mut self.session.chat_streaming {
-                    if let Some(call) = streaming.tool_calls.iter_mut().find(|c| c.id == tool_call_id) {
-                        call.status = ToolStatus::Success;
-                        call.output = result;
+                // Find the tool call message and update its status
+                for msg in self.session.chat_messages.iter_mut().rev() {
+                    if let ChatContent::ToolCall(ref mut call) = msg.content {
+                        if call.id == tool_call_id {
+                            call.status = ToolStatus::Success;
+                            call.output = result;
+                            break;
+                        }
                     }
                 }
             }
             AgentEventKind::TaskComplete { summary: _ } => {
-                // Finalize streaming into messages
-                if let Some(streaming) = self.session.chat_streaming.take() {
-                    if !streaming.text_buffer.is_empty() {
-                        self.session.chat_messages.push(ChatMessage::assistant(streaming.text_buffer));
-                    }
-                    if !streaming.tool_calls.is_empty() {
-                        self.session.chat_messages.push(ChatMessage::assistant_tools(streaming.tool_calls));
-                    }
-                }
-                self.session.pending_response = false;
-                
-            }
-            AgentEventKind::Error { message } => {
+                // Flush any remaining text
+                self.flush_streaming_text();
                 self.session.chat_streaming = None;
                 self.session.pending_response = false;
-                self.session.chat_messages.push(ChatMessage::assistant(format!("Error: {}", message)));
+            }
+            AgentEventKind::Error { message } => {
+                self.flush_streaming_text();
+                self.session.chat_streaming = None;
+                self.session.pending_response = false;
+                self.session.chat_messages.push(ChatMessage::assistant(format!("Error: {message}")));
                 self.push_toast(Toast::error(&message));
             }
         }
     }
-
+    
+    /// Flush any pending streaming text to a message
+    fn flush_streaming_text(&mut self) {
+        if let Some(streaming) = &mut self.session.chat_streaming {
+            if !streaming.text_buffer.is_empty() {
+                let text = std::mem::take(&mut streaming.text_buffer);
+                self.session.chat_messages.push(crate::chat::ChatMessage::assistant(text));
+            }
+        }
+    }
     pub fn in_answer_mode(&self) -> bool {
         self.session.agent_question.is_some()
     }

@@ -21,7 +21,7 @@ pub enum ChatRole {
 #[derive(Debug, Clone)]
 pub enum ChatContent {
     Text(String),
-    ToolCalls(Vec<ToolCall>),
+    ToolCall(ToolCall),
 }
 
 #[derive(Debug, Clone)]
@@ -44,7 +44,6 @@ pub enum ToolStatus {
 #[derive(Debug, Clone, Default)]
 pub struct StreamingState {
     pub text_buffer: String,
-    pub tool_calls: Vec<ToolCall>,
 }
 
 impl ChatMessage {
@@ -66,11 +65,11 @@ impl ChatMessage {
         }
     }
 
-    pub fn assistant_tools(calls: Vec<ToolCall>) -> Self {
+    pub fn assistant_tool(call: ToolCall) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             role: ChatRole::Assistant,
-            content: ChatContent::ToolCalls(calls),
+            content: ChatContent::ToolCall(call),
             timestamp: Utc::now(),
         }
     }

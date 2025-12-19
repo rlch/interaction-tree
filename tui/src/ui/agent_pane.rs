@@ -16,23 +16,15 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    // If in AgentChat mode, show chat with composer at bottom
-    // Otherwise show chat messages only (no composer)
-    let (chat_area, composer_area) = if matches!(app.mode, Mode::AgentChat) {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(3)])
-            .split(area);
-        (chunks[0], Some(chunks[1]))
-    } else {
-        (area, None)
-    };
+    // Always show composer at bottom for Agent tab
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(3)])
+        .split(area);
+    let (chat_area, composer_area) = (chunks[0], chunks[1]);
     
     render_chat(frame, app, chat_area);
-    
-    if let Some(composer_area) = composer_area {
-        render_composer(frame, app, composer_area);
-    }
+    render_composer(frame, app, composer_area);
 }
 
 fn render_chat(frame: &mut Frame, app: &App, area: Rect) {
@@ -59,11 +51,6 @@ fn render_chat(frame: &mut Frame, app: &App, area: Rect) {
         // Show streaming text
         if !streaming.text_buffer.is_empty() {
             all_lines.extend(render_markdown(&streaming.text_buffer));
-        }
-        
-        // Show streaming tool calls
-        for call in &streaming.tool_calls {
-            all_lines.extend(render_tool_call_lines(call));
         }
     }
     
@@ -98,18 +85,22 @@ fn render_chat(frame: &mut Frame, app: &App, area: Rect) {
 
 fn render_composer(frame: &mut Frame, app: &App, area: Rect) {
     let t = theme();
+    let is_active = matches!(app.mode, Mode::AgentChat);
     
+    let border_color = if is_active { Color::Green } else { t.border };
     let block = Block::default()
         .borders(Borders::TOP)
-        .border_style(Style::default().fg(t.border));
+        .border_style(Style::default().fg(border_color));
     
     let inner = block.inner(area);
     frame.render_widget(block, area);
     
     // Prompt and input
-    let prompt = Span::styled("> ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD));
+    let prompt_color = if is_active { Color::Green } else { t.text_dim };
+    let prompt = Span::styled("> ", Style::default().fg(prompt_color).add_modifier(Modifier::BOLD));
     let input_text = if app.session.chat_input.is_empty() {
-        Span::styled("Type a message...", Style::default().fg(t.text_dim))
+        let hint = if is_active { "Type a message..." } else { "Press Enter to chat" };
+        Span::styled(hint, Style::default().fg(t.text_dim))
     } else {
         Span::styled(&app.session.chat_input, Style::default().fg(t.text))
     };
@@ -117,10 +108,12 @@ fn render_composer(frame: &mut Frame, app: &App, area: Rect) {
     let line = Line::from(vec![prompt, input_text]);
     frame.render_widget(Paragraph::new(line), inner);
     
-    // Show cursor
-    let cursor_x = inner.x + 2 + app.session.chat_cursor as u16;
-    let cursor_y = inner.y;
-    frame.set_cursor_position((cursor_x.min(inner.right().saturating_sub(1)), cursor_y));
+    // Show cursor only when active
+    if is_active {
+        let cursor_x = inner.x + 2 + app.session.chat_cursor as u16;
+        let cursor_y = inner.y;
+        frame.set_cursor_position((cursor_x.min(inner.right().saturating_sub(1)), cursor_y));
+    }
 }
 
 fn render_message(msg: &ChatMessage) -> Vec<Line<'static>> {
@@ -147,10 +140,8 @@ fn render_message(msg: &ChatMessage) -> Vec<Line<'static>> {
         ChatContent::Text(text) => {
             lines.extend(render_markdown(text));
         }
-        ChatContent::ToolCalls(calls) => {
-            for call in calls {
-                lines.extend(render_tool_call_lines(call));
-            }
+        ChatContent::ToolCall(call) => {
+            lines.extend(render_tool_call_lines(call));
         }
     }
     
