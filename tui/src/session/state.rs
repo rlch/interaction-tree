@@ -25,6 +25,8 @@ pub struct SessionState {
     pub chat_input: String,
     /// Cursor position in chat input
     pub chat_cursor: usize,
+    /// Chat scroll offset (lines from bottom, 0 = auto-scroll)
+    pub chat_scroll: usize,
 
     pub tree: Option<InteractionTree>,
     pub tree_state: TreeState<String>,
@@ -49,6 +51,7 @@ impl SessionState {
             chat_streaming: None,
             chat_input: String::new(),
             chat_cursor: 0,
+            chat_scroll: 0,
             tree: None,
             tree_state: TreeState::default(),
             conversation_id: None,
@@ -69,6 +72,7 @@ impl SessionState {
         self.chat_streaming = None;
         self.chat_input.clear();
         self.chat_cursor = 0;
+        self.chat_scroll = 0;
         self.tree = None;
         self.tree_state = TreeState::default();
         self.conversation_id = None;

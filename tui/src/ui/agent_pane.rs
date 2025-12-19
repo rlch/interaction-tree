@@ -7,11 +7,11 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
     Frame,
 };
 
-pub fn render(frame: &mut Frame, app: &App, area: Rect) {
+pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
     if area.width < 3 || area.height < 3 {
         return;
     }
@@ -27,7 +27,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     render_composer(frame, app, composer_area);
 }
 
-fn render_chat(frame: &mut Frame, app: &App, area: Rect) {
+fn render_chat(frame: &mut Frame, app: &mut App, area: Rect) {
     let t = theme();
     
     // Collect all lines from chat messages
@@ -99,15 +99,39 @@ fn render_chat(frame: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
     
-    // Calculate scroll - auto-scroll to bottom
-    let content_height = all_lines.len() as u16;
-    let visible_height = inner.height;
-    let scroll = content_height.saturating_sub(visible_height);
+    // Calculate scroll
+    let content_height = all_lines.len();
+    let visible_height = inner.height as usize;
+    let max_scroll = content_height.saturating_sub(visible_height);
+    
+    // Clamp scroll to valid range
+    app.session.chat_scroll = app.session.chat_scroll.min(max_scroll);
+    
+    // If scroll is 0, auto-scroll to bottom; otherwise use manual scroll position
+    let scroll = if app.session.chat_scroll == 0 {
+        max_scroll
+    } else {
+        max_scroll.saturating_sub(app.session.chat_scroll)
+    };
     
     let paragraph = Paragraph::new(all_lines)
         .wrap(Wrap { trim: false })
-        .scroll((scroll, 0));
+        .scroll((scroll as u16, 0));
     frame.render_widget(paragraph, inner);
+    
+    // Render scrollbar if content exceeds visible area
+    if content_height > visible_height {
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("↑"))
+            .end_symbol(Some("↓"));
+        let mut scrollbar_state = ScrollbarState::new(max_scroll)
+            .position(scroll);
+        frame.render_stateful_widget(
+            scrollbar,
+            inner,
+            &mut scrollbar_state,
+        );
+    }
 }
 
 fn render_composer(frame: &mut Frame, app: &App, area: Rect) {

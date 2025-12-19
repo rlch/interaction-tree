@@ -238,6 +238,7 @@ export async function executeAgent(systemPrompt, userMessage, config, vmClient, 
         includePartialMessages: true, // Enable streaming
     };
     options.model = config.model ?? DEFAULT_MODEL;
+    console.log(`[agent] Using model: ${options.model}`);
     if (config.resume) {
         options.resume = config.resume;
     }

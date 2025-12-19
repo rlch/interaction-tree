@@ -331,6 +331,7 @@ export async function executeAgent(
   };
 
   options.model = config.model ?? DEFAULT_MODEL;
+  console.log(`[agent] Using model: ${options.model}`);
 
   if (config.resume) {
     options.resume = config.resume;

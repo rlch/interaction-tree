@@ -70,9 +70,6 @@ export class VMServiceClient extends EventEmitter {
     receivedNavigationEvent = false;
     receivedReloadEvent = false;
     errorLog = new ErrorLog();
-    // Discovered Flutter services (registered by flutter_tools)
-    hotRestartMethod = null;
-    hotReloadMethod = null;
     get isConnected() {
         return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
     }
@@ -84,24 +81,37 @@ export class VMServiceClient extends EventEmitter {
      * Subscribes to Extension and Isolate event streams for real-time updates.
      */
     async connect(uri) {
-        log.vm.info({ uri }, 'Connecting to VM service');
+        log.vm.info({ uri }, 'VM connect() called');
+        log.vm.debug({ uri, uriLength: uri?.length, uriType: typeof uri }, 'VM connect() uri details');
         if (this.ws) {
+            log.vm.debug('Existing WebSocket found, disconnecting first');
             await this.disconnect();
         }
         this.uri = uri;
+        log.vm.debug({ uri }, 'Creating new WebSocket connection');
         return new Promise((resolve, reject) => {
-            this.ws = new WebSocket(uri);
+            try {
+                this.ws = new WebSocket(uri);
+                log.vm.debug('WebSocket instance created, waiting for open event');
+            }
+            catch (err) {
+                log.vm.error({ err, uri }, 'Failed to create WebSocket instance');
+                reject(err);
+                return;
+            }
             this.ws.on('open', async () => {
-                log.vm.debug('WebSocket opened');
+                log.vm.info({ uri }, 'WebSocket opened successfully');
                 try {
+                    log.vm.debug('Finding main isolate...');
                     await this.findMainIsolate();
                     log.vm.info({ isolateId: this.isolateId }, 'Found main isolate');
+                    log.vm.debug('Subscribing to streams...');
                     await this.subscribeToStreams();
-                    log.vm.info('VM client connected and subscribed to streams');
+                    log.vm.info({ uri, isolateId: this.isolateId }, 'VM client fully connected and subscribed to streams');
                     resolve();
                 }
                 catch (err) {
-                    log.vm.error({ err }, 'Failed to initialize VM client');
+                    log.vm.error({ err, errMessage: err instanceof Error ? err.message : String(err) }, 'Failed to initialize VM client after WebSocket opened');
                     // Close the socket if we can't find the isolate
                     this.ws?.close();
                     this.ws = null;
@@ -112,11 +122,12 @@ export class VMServiceClient extends EventEmitter {
             this.ws.on('message', (data) => {
                 this.handleMessage(data.toString());
             });
-            this.ws.on('close', () => {
+            this.ws.on('close', (code, reason) => {
+                log.vm.warn({ code, reason: reason?.toString() }, 'WebSocket closed');
                 this.handleClose();
             });
             this.ws.on('error', (err) => {
-                log.vm.error({ err: err.message }, 'WebSocket error');
+                log.vm.error({ err: err.message, uri }, 'WebSocket error event');
                 reject(new Error(`WebSocket error: ${err.message}`));
             });
         });
@@ -132,7 +143,6 @@ export class VMServiceClient extends EventEmitter {
             { id: 'Extension', desc: 'Extension events (Flutter.Frame, Flutter.Navigation, Flutter.Error)' },
             { id: 'Isolate', desc: 'Isolate events (reload, restart)' },
             { id: 'Stderr', desc: 'Stderr output for error collection' },
-            { id: 'Service', desc: 'Service registration events (hotRestart, hotReload)' },
         ];
         for (const stream of streams) {
             try {
@@ -265,19 +275,15 @@ export class VMServiceClient extends EventEmitter {
             this.errorLog.clear();
         }
         try {
-            // hotRestart is a registered service (by flutter_tools), not a built-in VM method.
-            // The service name may be namespaced (e.g., 's0.hotRestart').
-            // We discover the actual method name by listening to Service stream events.
-            const methodName = this.hotRestartMethod ?? 'hotRestart';
-            log.vm.debug({ methodName }, 'Calling hot restart');
-            const result = await this.callMethod(methodName, {});
-            // Response may be nested in result.result
-            const resultType = result.result?.type ?? result.type;
-            const success = resultType === 'Success' || resultType === undefined;
+            // hotRestart is a service method, not an extension (called without isolateId prefix)
+            const result = await this.callMethod('hotRestart', {
+                isolateId: this.isolateId,
+            });
+            const success = result.type === 'Success' || result.type === undefined;
             return {
                 success,
                 restartedAt: new Date().toISOString(),
-                error: success ? undefined : `Restart returned type: ${resultType}`,
+                error: success ? undefined : 'Restart returned non-success type',
             };
         }
         catch (err) {
@@ -327,6 +333,13 @@ export class VMServiceClient extends EventEmitter {
     }
     async callMethod(method, params) {
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+            log.vm.error({
+                method,
+                hasWs: !!this.ws,
+                readyState: this.ws?.readyState,
+                readyStateNames: { 0: 'CONNECTING', 1: 'OPEN', 2: 'CLOSING', 3: 'CLOSED' },
+                uri: this.uri
+            }, 'callMethod failed: Not connected to VM service');
             throw new Error('Not connected to VM service');
         }
         const id = ++this.requestId;
@@ -466,21 +479,6 @@ export class VMServiceClient extends EventEmitter {
                 this.receivedReloadEvent = true;
                 this.emit('reload');
                 this.emit('treeChanged');
-            }
-        }
-        // Service registration events (discover hotRestart/hotReload methods)
-        if (streamId === 'Service') {
-            const serviceEvent = event;
-            if (serviceEvent.kind === 'ServiceRegistered' && serviceEvent.service && serviceEvent.method) {
-                log.vm.debug({ service: serviceEvent.service, method: serviceEvent.method }, 'Service registered');
-                if (serviceEvent.service === 'hotRestart') {
-                    this.hotRestartMethod = serviceEvent.method;
-                    log.vm.info({ method: serviceEvent.method }, 'Discovered hotRestart service');
-                }
-                else if (serviceEvent.service === 'hotReload') {
-                    this.hotReloadMethod = serviceEvent.method;
-                    log.vm.info({ method: serviceEvent.method }, 'Discovered hotReload service');
-                }
             }
         }
     }

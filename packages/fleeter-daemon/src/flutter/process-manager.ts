@@ -6,6 +6,7 @@ import { spawn, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import { existsSync } from 'fs';
 import { join } from 'path';
+import { log } from '../logger.js';
 
 // DevTools URI may be printed as plain text even in --machine mode
 const DEVTOOLS_URI_REGEX =
@@ -142,17 +143,24 @@ export class FlutterProcessManager extends EventEmitter {
 
                 // Capture VM service URI from app.debugPort event
                 if (event.params?.wsUri) {
+                  log.flutter.debug({ sessionId, wsUri: event.params.wsUri, eventType: event.event }, 'Found wsUri in event params');
                   vmServiceUri = event.params.wsUri as string;
                 } else if (event.params?.uri && !vmServiceUri) {
+                  log.flutter.debug({ sessionId, uri: event.params.uri, eventType: event.event }, 'Found uri in event params (fallback)');
                   vmServiceUri = event.params.uri as string;
                 }
 
                 if (event.event === 'app.started' && vmServiceUri && !resolved) {
+                  log.flutter.info({ sessionId, vmServiceUri }, 'app.started event received with vmServiceUri - emitting started');
                   resolved = true;
                   flutterProcess.vmServiceUri = vmServiceUri;
                   flutterProcess.startedAt = new Date();
                   this.emit('started', sessionId, vmServiceUri);
                   resolve(flutterProcess);
+                } else if (event.event === 'app.started' && !vmServiceUri) {
+                  log.flutter.warn({ sessionId }, 'app.started event received but NO vmServiceUri available yet');
+                } else if (event.event === 'app.started' && resolved) {
+                  log.flutter.debug({ sessionId }, 'app.started event received but already resolved');
                 }
               }
             } catch {
@@ -193,13 +201,16 @@ export class FlutterProcessManager extends EventEmitter {
       // Timeout
       setTimeout(() => {
         if (!resolved) {
+          log.flutter.warn({ sessionId, vmServiceUri }, 'Timeout reached - checking vmServiceUri');
           resolved = true;
           if (vmServiceUri) {
+            log.flutter.info({ sessionId, vmServiceUri }, 'Timeout fallback: emitting started with vmServiceUri');
             flutterProcess.vmServiceUri = vmServiceUri;
             flutterProcess.startedAt = new Date();
             this.emit('started', sessionId, vmServiceUri);
             resolve(flutterProcess);
           } else {
+            log.flutter.error({ sessionId }, 'Timeout fallback: NO vmServiceUri - rejecting');
             this.processes.delete(sessionId);
             reject(new Error('Timeout waiting for app to start'));
           }

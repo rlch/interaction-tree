@@ -32,76 +32,25 @@ export class Daemon {
 
   private setupFlutterEvents(): void {
     this.flutterManager.on('started', async (sessionId: string, vmServiceUri: string) => {
-      log.daemon.info({ sessionId, vmServiceUri }, 'Flutter app started');
+      log.daemon.info({ sessionId, vmServiceUri }, 'Flutter started event received');
+      log.daemon.debug({ sessionId, vmServiceUriLength: vmServiceUri?.length, vmServiceUriType: typeof vmServiceUri }, 'vmServiceUri details');
+      
       this.sessionManager.updateStatus(sessionId, 'running', { vmServiceUri });
       
       // Connect VM client
+      log.daemon.debug({ sessionId }, 'Creating new VMServiceClient');
       const vmClient = new VMServiceClient();
+      
       try {
+        log.daemon.info({ sessionId, vmServiceUri }, 'Attempting VM client connection');
         await vmClient.connect(vmServiceUri);
+        log.daemon.info({ sessionId, isConnected: vmClient.isConnected }, 'VM client connect() completed');
+        
         this.vmClients.set(sessionId, vmClient);
-        log.daemon.info({ sessionId }, 'VM client connected');
-
-        // Listen for real-time tree change events (like DevTools)
-        vmClient.on('treeChanged', async () => {
-          log.tree.debug({ sessionId }, 'treeChanged event received');
-          try {
-            // Fetch updated tree and broadcast to clients
-            log.tree.debug({ sessionId }, 'Fetching tree...');
-            const tree = await vmClient.getTree({ summaryOnly: true });
-            log.tree.info({ sessionId, nodeCount: Array.isArray(tree) ? tree.length : 0 }, 'Tree fetched, broadcasting');
-            this.server.broadcastEvent('tree', 'tree.updated', { tree }, sessionId);
-          } catch (err) {
-            log.tree.error({ sessionId, err }, 'Failed to fetch tree on change');
-          }
-        });
-
-        vmClient.on('navigation', (route?: string) => {
-          log.tree.info({ sessionId, route }, 'Navigation event');
-          this.server.broadcastEvent('tree', 'tree.navigation', { route }, sessionId);
-        });
-
-        vmClient.on('reload', () => {
-          log.tree.info({ sessionId }, 'Reload event');
-          this.server.broadcastEvent('tree', 'tree.reloaded', {}, sessionId);
-        });
-
-        vmClient.on('interaction', (event) => {
-          log.daemon.info({ sessionId, ...event }, 'Interaction executed');
-          this.server.broadcastEvent('interaction', 'interaction.executed', event, sessionId);
-        });
-
-        // Fetch initial tree after connection
-        log.tree.debug({ sessionId }, 'Fetching initial tree...');
-        try {
-          const tree = await vmClient.getTree({ summaryOnly: true });
-          log.tree.info({ sessionId, nodeCount: Array.isArray(tree) ? tree.length : 0 }, 'Initial tree fetched');
-          // Debug: log first few nodes with their capabilities
-          if (Array.isArray(tree)) {
-            tree.slice(0, 3).forEach((node, i) => {
-              log.tree.debug({
-                idx: i,
-                id: node.id,
-                widgetType: node.widgetType,
-                capabilities: node.capabilities,
-                actions: node.actions,
-                childCount: node.children?.length ?? 0,
-              }, 'Tree node sample');
-            });
-          }
-          this.server.broadcastEvent('tree', 'tree.updated', { tree }, sessionId);
-        } catch (err) {
-          log.tree.warn({ sessionId, err }, 'Initial tree fetch failed (extension may not be loaded)');
-        }
+        log.daemon.info({ sessionId, vmClientsCount: this.vmClients.size, vmClientsKeys: Array.from(this.vmClients.keys()) }, 'VM client added to vmClients map');
       } catch (err) {
-        log.daemon.error({ sessionId, err }, 'Failed to connect VM client');
+        log.daemon.error({ sessionId, err, errMessage: err instanceof Error ? err.message : String(err), errStack: err instanceof Error ? err.stack : undefined }, 'Failed to connect VM client');
       }
-    });
-
-    this.flutterManager.on('launching', (sessionId: string, info: { appId?: string; deviceId?: string }) => {
-      log.daemon.info({ sessionId, ...info }, 'Flutter app launching');
-      // Broadcast launching event with device info
-      this.server.broadcastEvent('flutter', 'flutter.launching', info, sessionId);
     });
 
     this.flutterManager.on('exit', (sessionId: string) => {

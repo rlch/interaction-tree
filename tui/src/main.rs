@@ -16,6 +16,7 @@ mod ws;
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -48,11 +49,24 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Setup logging to file (TUI owns stdout)
-    let log_file = std::fs::File::create("/tmp/fleeter.log")?;
+    // Setup logging to ~/.fleeter/logs/ with daily rotation (TUI owns stdout)
+    let logs_dir = dirs::home_dir()
+        .map(|h| h.join(".fleeter").join("logs"))
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    std::fs::create_dir_all(&logs_dir)?;
+
+    let file_appender = RollingFileAppender::builder()
+        .rotation(Rotation::DAILY)
+        .filename_prefix("tui.log")
+        .build(&logs_dir)
+        .expect("failed to create log appender");
+
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("it_tui=debug,warn"));
+
     tracing_subscriber::registry()
-        .with(EnvFilter::from_default_env().add_directive("it_tui=debug".parse()?))
-        .with(fmt::layer().with_writer(log_file).with_ansi(false))
+        .with(env_filter)
+        .with(fmt::layer().with_writer(file_appender).with_ansi(false))
         .init();
 
     let args = Args::parse();

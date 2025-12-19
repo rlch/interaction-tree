@@ -623,6 +623,26 @@ impl App {
         self.scroll_offset = self.log_view.scroll;
     }
 
+    /// Scroll chat up (increases scroll offset from bottom)
+    pub fn chat_scroll_up(&mut self) {
+        self.session.chat_scroll = self.session.chat_scroll.saturating_add(3);
+    }
+
+    /// Scroll chat down (decreases scroll offset, 0 = auto-scroll to bottom)
+    pub fn chat_scroll_down(&mut self) {
+        self.session.chat_scroll = self.session.chat_scroll.saturating_sub(3);
+    }
+
+    /// Scroll chat to top
+    pub fn chat_scroll_to_top(&mut self) {
+        self.session.chat_scroll = usize::MAX; // Will be clamped during render
+    }
+
+    /// Scroll chat to bottom (auto-scroll mode)
+    pub fn chat_scroll_to_bottom(&mut self) {
+        self.session.chat_scroll = 0;
+    }
+
     /// Toggle visual line selection mode
     pub fn toggle_visual_mode(&mut self) {
         self.log_view.toggle_visual();

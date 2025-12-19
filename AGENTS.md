@@ -49,81 +49,33 @@ See [DAEMON_DESIGN.md](./DAEMON_DESIGN.md) for full architecture documentation.
 
 ## Commands
 
-### Daemon Management
-
 ```bash
-# Install dependencies
+# Build & install
 bun install
-
-# Build TypeScript packages
 bun run build
 
-# Start daemon (foreground)
-bun run daemon:start
+# Daemon (launchd service)
+bun run daemon:install      # Install & start
+bun run daemon:uninstall    # Stop & remove
+bun run daemon:restart      # Reinstall
+bun run daemon:status       # Check status
 
-# Install as launchd service (macOS)
-bun run daemon:install
+# Logs (~/.fleeter/logs/)
+bun run logs:daemon         # Tail daemon logs
+bun run logs:clear          # Clear all logs
 
-# Uninstall launchd service
-bun run daemon:uninstall
+# Development
+bun run build               # Build TypeScript packages
+bun run test                # Run tests (vitest)
+bun run typecheck           # Type check
+bun run lint                # Lint
 
-# Check daemon status
-bun run daemon:status
-```
+# Flutter package
+dart test                   # Dart tests
+dart analyze                # Analyze
 
-### Logs
-
-All logs are stored in `~/.fleeter/logs/`.
-
-```bash
-# List log files
-bun run logs
-
-# Tail daemon logs
-bun run logs:daemon
-
-# Tail TUI logs  
-bun run logs:tui
-
-# Clear all logs
-bun run logs:clear
-```
-
-### Development
-
-```bash
-# Build all TypeScript packages
-bun run build
-
-# Run tests
-bun run test
-
-# Type checking
-bun run typecheck
-
-# Lint
-bun run lint
-```
-
-### Flutter Package
-
-```bash
-# Run Dart tests
-dart test
-
-# Run Flutter tests
-flutter test
-
-# Analyze Dart code
-dart analyze
-```
-
-### TUI (Rust)
-
-```bash
-cd tui
-cargo build --release
-cargo run
+# TUI (Rust)
+cd tui && cargo run
 ```
 
 ## Key Files
@@ -131,11 +83,11 @@ cargo run
 | File | Purpose |
 |------|---------|
 | `packages/fleeter-daemon/src/daemon.ts` | Main daemon class |
+| `packages/fleeter-daemon/src/agent/executor.ts` | AI agent execution (Claude Agent SDK) |
 | `packages/fleeter-daemon/src/flutter/process-manager.ts` | Flutter process lifecycle |
 | `packages/fleeter-daemon/src/session/manager.ts` | Session management |
 | `packages/fleeter-mcp-proxy/src/proxy.ts` | MCP protocol translation |
 | `lib/src/interaction_key.dart` | Core InteractionKey widget |
-| `lib/src/interactable_mixin.dart` | Custom action mixin |
 | `tui/src/main.rs` | TUI entry point |
 
 ## Environment Variables
@@ -144,7 +96,6 @@ cargo run
 |----------|---------|-------------|
 | `FLEETER_PORT` | `9877` | WebSocket server port |
 | `FLEETER_HOST` | `127.0.0.1` | Host to bind to |
-| `ANTHROPIC_API_KEY` | (required) | API key for AI agent mode |
 
 ## MCP Configuration
 
@@ -153,7 +104,7 @@ Add to `~/.config/amp/settings.json`:
 ```json
 {
   "mcpServers": {
-    "fleeter": {
+    "dart": {
       "command": "bun",
       "args": ["run", "--cwd", "/path/to/interaction_tree/packages/fleeter-mcp-proxy", "start"]
     }
@@ -161,26 +112,8 @@ Add to `~/.config/amp/settings.json`:
 }
 ```
 
-Or after global install:
-
-```json
-{
-  "mcpServers": {
-    "fleeter": {
-      "command": "fleeter-mcp-proxy"
-    }
-  }
-}
-```
-
-## Testing Conventions
-
-- **Dart tests**: Use `flutter test` or `dart test`
-- **TypeScript tests**: Use `vitest` via `bun run test`
-- **Rust tests**: Use `cargo test`
-
 ## Code Style
 
-- **Dart**: Follow `flutter_lints` rules
-- **TypeScript**: ESLint with TypeScript rules, no semicolons optional
-- **Rust**: Standard rustfmt
+- **Dart**: `flutter_lints`
+- **TypeScript**: ESLint, no semicolons
+- **Rust**: rustfmt
