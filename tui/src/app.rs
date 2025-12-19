@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use tui_tree_widget::TreeState;
 
@@ -21,17 +21,23 @@ pub enum InteractionAction {
 /// Log viewer mode (vim-like)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LogViewMode {
+    /// Normal mode - cursor navigation, no selection
     #[default]
     Normal,
+    /// Visual line mode (V) - selecting contiguous lines
     Visual,
 }
 
 /// State for vim-like log viewing with cursor and selection
 #[derive(Debug, Clone, Default)]
 pub struct LogViewState {
+    /// Current cursor line (0-indexed)
     pub cursor: usize,
+    /// Viewport offset (first visible line)
     pub scroll: usize,
+    /// Visual mode anchor (line where selection started)
     pub anchor: Option<usize>,
+    /// Current mode
     pub mode: LogViewMode,
 }
 
@@ -40,6 +46,7 @@ impl LogViewState {
         Self::default()
     }
 
+    /// Get the selection range (start, end) inclusive, sorted
     pub fn selection_range(&self) -> Option<(usize, usize)> {
         self.anchor.map(|anchor| {
             let start = anchor.min(self.cursor);
@@ -48,6 +55,7 @@ impl LogViewState {
         })
     }
 
+    /// Check if a line is selected
     pub fn is_selected(&self, line: usize) -> bool {
         match self.mode {
             LogViewMode::Normal => false,
@@ -61,6 +69,7 @@ impl LogViewState {
         }
     }
 
+    /// Move cursor up, adjusting scroll if needed
     pub fn cursor_up(&mut self, viewport_height: usize) {
         if self.cursor > 0 {
             self.cursor -= 1;
@@ -68,6 +77,7 @@ impl LogViewState {
         }
     }
 
+    /// Move cursor down, adjusting scroll if needed
     pub fn cursor_down(&mut self, total_lines: usize, viewport_height: usize) {
         if total_lines > 0 && self.cursor < total_lines - 1 {
             self.cursor += 1;
@@ -75,11 +85,13 @@ impl LogViewState {
         }
     }
 
+    /// Jump to first line
     pub fn cursor_top(&mut self) {
         self.cursor = 0;
         self.scroll = 0;
     }
 
+    /// Jump to last line
     pub fn cursor_bottom(&mut self, total_lines: usize, viewport_height: usize) {
         if total_lines > 0 {
             self.cursor = total_lines - 1;
@@ -87,16 +99,19 @@ impl LogViewState {
         }
     }
 
+    /// Enter visual mode at current cursor
     pub fn enter_visual(&mut self) {
         self.mode = LogViewMode::Visual;
         self.anchor = Some(self.cursor);
     }
 
+    /// Exit visual mode
     pub fn exit_visual(&mut self) {
         self.mode = LogViewMode::Normal;
         self.anchor = None;
     }
 
+    /// Toggle visual mode
     pub fn toggle_visual(&mut self) {
         match self.mode {
             LogViewMode::Normal => self.enter_visual(),
@@ -104,24 +119,35 @@ impl LogViewState {
         }
     }
 
+    /// Ensure cursor is visible in viewport
     pub fn ensure_cursor_visible(&mut self, viewport_height: usize) {
         if viewport_height == 0 {
             return;
         }
+        // Scroll up if cursor is above viewport
         if self.cursor < self.scroll {
             self.scroll = self.cursor;
         }
+        // Scroll down if cursor is below viewport
         if self.cursor >= self.scroll + viewport_height {
             self.scroll = self.cursor - viewport_height + 1;
         }
     }
 
+    /// Clamp cursor to valid range after log count changes
     pub fn clamp_cursor(&mut self, total_lines: usize) {
         if total_lines == 0 {
             self.cursor = 0;
             self.scroll = 0;
-        } else if self.cursor >= total_lines {
-            self.cursor = total_lines - 1;
+        } else {
+            if self.cursor >= total_lines {
+                self.cursor = total_lines - 1;
+            }
+            // Ensure scroll doesn't exceed max valid position
+            let max_scroll = total_lines.saturating_sub(1);
+            if self.scroll > max_scroll {
+                self.scroll = max_scroll;
+            }
         }
     }
 }
@@ -133,68 +159,20 @@ pub struct InteractionTree {
     pub last_updated: Option<String>,
 }
 
-/// Session-specific state that should be reset when switching sessions.
-/// This encapsulates TUI-only data that belongs to a particular session.
-/// Note: app_status, pid, vmServiceUri are stored in the Session struct (from daemon),
-/// NOT here, to avoid duplicate sources of truth.
-#[derive(Debug, Default)]
-pub struct SessionState {
-    pub flutter_logs: VecDeque<FlutterLogEntry>,
-    pub agent_events: VecDeque<MonitoringEvent>,
-    pub interaction_logs: VecDeque<LogEntry>,
-    pub tree: Option<InteractionTree>,
-    pub tree_state: TreeState<String>,
-    
-    pub agent_question: Option<String>,
-    pub pending_response: bool,
-    pub pending_intent: Option<String>,
-    pub last_agent_error: Option<String>,
-    /// Chat messages for the Agent pane
-    pub chat_messages: Vec<crate::chat::ChatMessage>,
-    /// Current streaming response from agent
-    pub chat_streaming: Option<crate::chat::StreamingState>,
-    /// Composer text input for agent chat
-    pub chat_input: String,
-    /// Cursor position in chat input
-    pub chat_cursor: usize,
-}
-
-impl SessionState {
-    pub fn new(max_events: usize) -> Self {
-        Self {
-            flutter_logs: VecDeque::with_capacity(max_events),
-            agent_events: VecDeque::with_capacity(max_events),
-            interaction_logs: VecDeque::with_capacity(max_events),
-            tree: None,
-            tree_state: TreeState::default(),
-            
-            agent_question: None,
-            pending_response: false,
-            pending_intent: None,
-            last_agent_error: None,
-            chat_messages: Vec::new(),
-            chat_streaming: None,
-            chat_input: String::new(),
-            chat_cursor: 0,
-        }
-    }
-
-    pub fn reset(&mut self, max_events: usize) {
-        self.flutter_logs = VecDeque::with_capacity(max_events);
-        self.agent_events = VecDeque::with_capacity(max_events);
-        self.interaction_logs = VecDeque::with_capacity(max_events);
-        self.tree = None;
-        self.tree_state = TreeState::default();
-        
-        self.agent_question = None;
-        self.pending_response = false;
-        self.pending_intent = None;
-        self.last_agent_error = None;
-        self.chat_messages.clear();
-        self.chat_streaming = None;
-        self.chat_input.clear();
-        self.chat_cursor = 0;
-    }
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TreeNode {
+    pub id: String,
+    #[serde(default)]
+    pub widget_type: Option<String>,
+    #[serde(default)]
+    pub children: Vec<TreeNode>,
+    #[serde(default)]
+    pub contexts: Vec<ContextInfo>,
+    #[serde(default)]
+    pub capabilities: Vec<Capability>,
+    #[serde(default)]
+    pub actions: Vec<Action>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -207,25 +185,8 @@ pub struct ContextInfo {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TreeNode {
-    pub id: String,
-    #[serde(default)]
-    pub widget_type: Option<String>,
-    #[serde(default)]
-    pub capabilities: Vec<Capability>,
-    #[serde(default)]
-    pub actions: Vec<Action>,
-    #[serde(default)]
-    pub children: Vec<TreeNode>,
-    #[serde(default)]
-    pub contexts: Vec<ContextInfo>,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Capability {
-    #[serde(rename = "type")]
-    pub capability_type: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -243,6 +204,20 @@ pub enum WsState {
     Connected,
 }
 
+#[derive(Debug, Clone)]
+pub enum AppStatus {
+    Unknown,
+    Starting,
+    Running {
+        pid: u32,
+        #[allow(dead_code)]
+        uri: String,
+    },
+    Stopped,
+    #[allow(dead_code)]
+    Error(String),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mode {
     Normal,
@@ -252,10 +227,10 @@ pub enum Mode {
     SessionPicker,
     /// Prompt for text input with a specific purpose
     InputPrompt(InputPromptKind),
-    /// Action menu for tree node interactions
-    ActionMenu,
     /// Agent chat input mode (focused on Agent tab)
     AgentChat,
+    /// Action menu for tree node interactions
+    ActionMenu,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -312,6 +287,78 @@ impl ContentTab {
     }
 }
 
+/// Session-specific state that is preserved when switching between sessions
+#[derive(Debug)]
+pub struct SessionState {
+    /// Flutter logs (from flutter run process)
+    pub flutter_logs: VecDeque<FlutterLogEntry>,
+    /// Agent events (tool calls, responses)
+    pub agent_events: VecDeque<MonitoringEvent>,
+    /// Interaction execution history (taps, scrolls, etc.)
+    pub interaction_logs: VecDeque<LogEntry>,
+
+    /// Chat messages for the Agent pane
+    pub chat_messages: Vec<crate::chat::ChatMessage>,
+    /// Current streaming response from agent
+    pub chat_streaming: Option<crate::chat::StreamingState>,
+    /// Composer text input
+    pub chat_input: String,
+    /// Cursor position in chat input
+    pub chat_cursor: usize,
+
+    pub tree: Option<InteractionTree>,
+    pub tree_state: TreeState<String>,
+
+    pub conversation_id: Option<String>,
+    pub agent_question: Option<String>,
+    pub pending_response: bool,
+    pub pending_intent: Option<String>,
+    pub last_agent_error: Option<String>,
+
+    /// Maximum events to keep per log type
+    max_events: usize,
+}
+
+impl SessionState {
+    pub fn new(max_events: usize) -> Self {
+        Self {
+            flutter_logs: VecDeque::with_capacity(max_events),
+            agent_events: VecDeque::with_capacity(max_events),
+            interaction_logs: VecDeque::with_capacity(max_events),
+            chat_messages: Vec::new(),
+            chat_streaming: None,
+            chat_input: String::new(),
+            chat_cursor: 0,
+            tree: None,
+            tree_state: TreeState::default(),
+            conversation_id: None,
+            agent_question: None,
+            pending_response: false,
+            pending_intent: None,
+            last_agent_error: None,
+            max_events,
+        }
+    }
+
+    /// Clear all session-specific data
+    pub fn clear(&mut self) {
+        self.flutter_logs.clear();
+        self.agent_events.clear();
+        self.interaction_logs.clear();
+        self.chat_messages.clear();
+        self.chat_streaming = None;
+        self.chat_input.clear();
+        self.chat_cursor = 0;
+        self.tree = None;
+        self.tree_state = TreeState::default();
+        self.conversation_id = None;
+        self.agent_question = None;
+        self.pending_response = false;
+        self.pending_intent = None;
+        self.last_agent_error = None;
+    }
+}
+
 pub struct App {
     pub ws_state: WsState,
     pub server_uri: String,
@@ -321,8 +368,12 @@ pub struct App {
     pub selected_session: Option<String>,
     pub session_picker_index: usize,
 
-    /// Session-specific state (logs, tree, agent state, etc.)
+    pub app_status: AppStatus,
+
+    /// Current session state (session-specific data)
     pub session: SessionState,
+    /// Session states stored by session ID (preserved across session switches)
+    pub session_states: HashMap<String, SessionState>,
     pub max_events: usize,
 
     pub mode: Mode,
@@ -330,7 +381,7 @@ pub struct App {
     pub filter: Option<String>,
     pub content_tab: ContentTab,
     pub scroll_offset: usize,
-
+    
     /// Log viewer state (cursor, selection, viewport)
     pub log_view: LogViewState,
     /// Cached viewport height for log navigation
@@ -341,8 +392,10 @@ pub struct App {
 
     pub throbber_state: throbber_widgets_tui::ThrobberState,
 
-    pub toasts: VecDeque<Toast>,
-    pub toast_ttl_secs: u64,
+    // Completions - currently unused, hotkey-driven UI instead
+    // pub completions: Vec<&'static str>,
+    // pub completion_index: usize,
+    // pub completion_start_col: usize,
 
     /// Action menu items (label, action)
     pub action_menu_items: Vec<(String, InteractionAction)>,
@@ -351,10 +404,11 @@ pub struct App {
     /// Currently selected node ID for action menu
     pub action_menu_node_id: Option<String>,
 
+    pub toasts: VecDeque<Toast>,
+    pub toast_ttl_secs: u64,
+
     pub should_quit: bool,
 }
-
-
 
 #[derive(Debug, Clone)]
 pub struct LogEntry {
@@ -427,7 +481,10 @@ impl App {
             selected_session: None,
             session_picker_index: 0,
 
+            app_status: AppStatus::Unknown,
+
             session: SessionState::new(max_events),
+            session_states: HashMap::new(),
             max_events,
 
             mode: Mode::SessionPicker,
@@ -435,7 +492,7 @@ impl App {
             filter: None,
             content_tab: ContentTab::default(),
             scroll_offset: 0,
-
+            
             log_view: LogViewState::new(),
             log_viewport_height: 0,
 
@@ -444,89 +501,15 @@ impl App {
 
             throbber_state: throbber_widgets_tui::ThrobberState::default(),
 
-            toasts: VecDeque::new(),
-            toast_ttl_secs: 5,
-
             action_menu_items: Vec::new(),
             action_menu_index: 0,
             action_menu_node_id: None,
 
+            toasts: VecDeque::new(),
+            toast_ttl_secs: 5,
+
             should_quit: false,
         }
-    }
-
-    /// Build and show action menu for the currently selected tree node
-    pub fn show_action_menu(&mut self) {
-        let caps = self.selected_node_capabilities();
-        let actions = self.selected_node_actions();
-        let node_id = self.selected_node_id();
-
-        if caps.is_empty() && actions.is_empty() {
-            return;
-        }
-
-        let mut items: Vec<(String, InteractionAction)> = Vec::new();
-
-        // Capabilities as menu items
-        if caps.contains(&"tap".to_string()) {
-            items.push(("Tap".to_string(), InteractionAction::Tap));
-        }
-        if caps.contains(&"longPress".to_string()) {
-            items.push(("Long Press".to_string(), InteractionAction::LongPress));
-        }
-        if caps.contains(&"doubleTap".to_string()) {
-            items.push(("Double Tap".to_string(), InteractionAction::DoubleTap));
-        }
-        if caps.contains(&"scroll".to_string()) {
-            items.push(("Scroll Up".to_string(), InteractionAction::Scroll { dx: 0.0, dy: -100.0 }));
-            items.push(("Scroll Down".to_string(), InteractionAction::Scroll { dx: 0.0, dy: 100.0 }));
-        }
-        if caps.contains(&"enterText".to_string()) {
-            items.push(("Enter Text...".to_string(), InteractionAction::EnterText(String::new())));
-        }
-
-        // Custom actions
-        for action in actions {
-            items.push((action.clone(), InteractionAction::Custom(action)));
-        }
-
-        if !items.is_empty() {
-            self.action_menu_items = items;
-            self.action_menu_index = 0;
-            self.action_menu_node_id = node_id;
-            self.mode = Mode::ActionMenu;
-        }
-    }
-
-    /// Get currently selected action from menu
-    pub fn selected_action(&self) -> Option<&InteractionAction> {
-        self.action_menu_items.get(self.action_menu_index).map(|(_, a)| a)
-    }
-
-    /// Move action menu selection up
-    pub fn action_menu_up(&mut self) {
-        if !self.action_menu_items.is_empty() {
-            if self.action_menu_index > 0 {
-                self.action_menu_index -= 1;
-            } else {
-                self.action_menu_index = self.action_menu_items.len() - 1;
-            }
-        }
-    }
-
-    /// Move action menu selection down
-    pub fn action_menu_down(&mut self) {
-        if !self.action_menu_items.is_empty() {
-            self.action_menu_index = (self.action_menu_index + 1) % self.action_menu_items.len();
-        }
-    }
-
-    /// Reset all session-specific state. Called when switching sessions.
-    pub fn reset_session_state(&mut self) {
-        self.session.reset(self.max_events);
-        self.scroll_offset = 0;
-        self.filter = None;
-        self.needs_tree_fetch = false;
     }
 
     pub fn push_toast(&mut self, toast: Toast) {
@@ -541,25 +524,21 @@ impl App {
         self.toasts.retain(|t| !t.is_expired(self.toast_ttl_secs));
     }
 
-    /// Get the currently selected session (single source of truth for session state)
-    pub fn current_session(&self) -> Option<&Session> {
-        let result = self.selected_session.as_ref()
-            .and_then(|id| self.sessions.iter().find(|s| s.id == *id));
-        if let Some(session) = &result {
-            tracing::debug!(
-                session_id = %session.id,
-                app_status = %session.app_status,
-                sessions_count = self.sessions.len(),
-                "current_session lookup"
-            );
+    /// Switch to a different session, saving current state and restoring new session's state
+    pub fn switch_to_session(&mut self, new_session_id: String) {
+        // Save current session's state
+        if let Some(old_id) = self.selected_session.take() {
+            let old_session = std::mem::replace(&mut self.session, SessionState::new(self.max_events));
+            self.session_states.insert(old_id, old_session);
         }
-        result
-    }
-
-    /// Get the currently selected session mutably
-    pub fn current_session_mut(&mut self) -> Option<&mut Session> {
-        let selected_id = self.selected_session.clone();
-        selected_id.and_then(move |id| self.sessions.iter_mut().find(|s| s.id == id))
+        
+        // Restore new session's state (or create new if none)
+        self.session = self.session_states
+            .remove(&new_session_id)
+            .unwrap_or_else(|| SessionState::new(self.max_events));
+        
+        // Set the new session
+        self.selected_session = Some(new_session_id);
     }
 
     // Completion methods - currently unused, hotkey-driven UI instead
@@ -617,10 +596,6 @@ impl App {
     pub fn set_tree(&mut self, tree: InteractionTree) {
         self.session.tree = Some(tree);
         self.session.tree_state = TreeState::default();
-        // Expand tree by default - open root node
-        self.session.tree_state.open(vec!["root".to_string()]);
-        // Select root by default
-        self.session.tree_state.select(vec!["root".to_string()]);
     }
 
     pub fn compact_tree(&self) -> Option<CompactTree> {
@@ -628,71 +603,6 @@ impl App {
             let (compact, _warnings) = CompactTree::from_tree_nodes(&t.nodes);
             compact
         })
-    }
-
-    /// Get capabilities for the currently selected tree node
-    pub fn selected_node_capabilities(&self) -> Vec<String> {
-        let compact = match self.compact_tree() {
-            Some(c) => c,
-            None => return Vec::new(),
-        };
-
-        // Get selected identifier from tree state
-        let selected = self.session.tree_state.selected();
-        if selected.is_empty() {
-            return Vec::new();
-        }
-
-        // Extract the ID from the last segment (format: "id_index" or just "id")
-        let last_id = selected.last().unwrap();
-        let node_id = last_id.split('_').next().unwrap_or(last_id);
-
-        // Look up capabilities in schema
-        if let Some(schema) = compact.schemas.get(node_id) {
-            return schema.capabilities.clone();
-        }
-
-        Vec::new()
-    }
-
-    /// Get actions for the currently selected tree node
-    pub fn selected_node_actions(&self) -> Vec<String> {
-        let compact = match self.compact_tree() {
-            Some(c) => c,
-            None => return Vec::new(),
-        };
-
-        let selected = self.session.tree_state.selected();
-        if selected.is_empty() {
-            return Vec::new();
-        }
-
-        let last_id = selected.last().unwrap();
-        let node_id = last_id.split('_').next().unwrap_or(last_id);
-
-        if let Some(schema) = compact.schemas.get(node_id) {
-            return schema.actions.clone();
-        }
-
-        Vec::new()
-    }
-
-    /// Get the ID of the currently selected tree node (for interaction execution)
-    pub fn selected_node_id(&self) -> Option<String> {
-        let selected = self.session.tree_state.selected();
-        if selected.is_empty() {
-            return None;
-        }
-
-        let last_id = selected.last().unwrap();
-        let node_id = last_id.split('_').next().unwrap_or(last_id);
-
-        // Don't return special IDs
-        if node_id == "root" || node_id == "ctx" || node_id == "het" || node_id == "var" {
-            return None;
-        }
-
-        Some(node_id.to_string())
     }
 
     pub fn push_interaction_log(&mut self, entry: LogEntry) {
@@ -703,30 +613,10 @@ impl App {
     }
 
     pub fn push_flutter_log(&mut self, entry: FlutterLogEntry) {
-        // Check if cursor is at the bottom before adding (for auto-follow)
-        let was_at_bottom = self.session.flutter_logs.is_empty()
-            || self.log_view.cursor >= self.session.flutter_logs.len().saturating_sub(1);
-
         if self.session.flutter_logs.len() >= self.max_events {
             self.session.flutter_logs.pop_front();
-            // Adjust cursor if we removed an entry above it
-            if self.log_view.cursor > 0 {
-                self.log_view.cursor = self.log_view.cursor.saturating_sub(1);
-            }
-            if self.log_view.scroll > 0 {
-                self.log_view.scroll = self.log_view.scroll.saturating_sub(1);
-            }
         }
         self.session.flutter_logs.push_back(entry);
-
-        // Auto-follow: move cursor to new bottom if it was at the bottom
-        if was_at_bottom {
-            let new_count = self.session.flutter_logs.len();
-            if new_count > 0 {
-                self.log_view.cursor = new_count - 1;
-                self.log_view.ensure_cursor_visible(self.log_viewport_height);
-            }
-        }
     }
 
     pub fn push_agent_event(&mut self, event: MonitoringEvent) {
@@ -757,7 +647,7 @@ impl App {
                 // Clear selected session if it was destroyed
                 if self.selected_session.as_deref() == Some(session_id) {
                     self.selected_session = None;
-                    self.reset_session_state();
+                    self.app_status = AppStatus::Stopped;
                 }
             }
             return;
@@ -791,9 +681,6 @@ impl App {
 
         if source.contains("agent") || event_type.starts_with("agent_") || event_type.contains("tool") {
             self.push_agent_event(event);
-        } else if event_type == "flutter.launching" {
-            // Skip launching event - it's just metadata, not a log line
-            return;
         } else if source.contains("flutter") || event_type.starts_with("flutter.") {
             // Flutter logs go to Flutter tab
             let line = extract_flutter_log(&event.payload);
@@ -804,67 +691,48 @@ impl App {
             let entry = LogEntry {
                 ts: event.ts.clone(),
                 level: LogLevel::Info,
-                message: format_interaction_event(&event.payload),
+                message: format!("[{}] {}", event.source, summarize_payload(&event.payload)),
             };
             self.push_interaction_log(entry);
         }
     }
 
     fn handle_session_status_event(&mut self, payload: &serde_json::Value) {
-       let event_session_id = payload.get("sessionId").and_then(|s| s.as_str());
-       let status = payload.get("status").and_then(|s| s.as_str());
-       let pid = payload.get("pid").and_then(|p| p.as_u64());
-       let uri = payload.get("vmServiceUri").and_then(|u| u.as_str());
-       
-       tracing::info!(
-           event_session_id = ?event_session_id,
-           selected_session = ?self.selected_session,
-           status = ?status,
-           pid = ?pid,
-           uri = ?uri,
-           sessions_count = self.sessions.len(),
-           "handle_session_status_event received"
-       );
+        // Check if this event is for our selected session
+        if let Some(session_id) = payload.get("sessionId").and_then(|s| s.as_str()) {
+            if self.selected_session.as_deref() != Some(session_id) {
+                return;
+            }
+        }
 
-       // Update the Session in the sessions list (always, not just selected session)
-       // This ensures we have accurate state when user switches sessions
-       if let Some(session_id) = event_session_id {
-           let session_ids: Vec<String> = self.sessions.iter().map(|s| s.id.clone()).collect();
-           tracing::debug!(session_id = session_id, available_sessions = ?session_ids, "Looking for session");
-           
-           let found = if let Some(session) = self.sessions.iter_mut().find(|s| s.id == session_id) {
-               let old_status = session.app_status.clone();
-               if let Some(status) = status {
-                   session.app_status = status.to_string();
-                   tracing::info!(
-                       session_id = session_id, 
-                       old_status = %old_status,
-                       new_status = status, 
-                       "Updated session.app_status"
-                   );
-               }
-               if let Some(pid) = pid {
-                   session.pid = Some(pid as u32);
-               }
-               if let Some(uri) = uri {
-                   session.vm_service_uri = Some(uri.to_string());
-               }
-               
-               // Note: Don't auto-fetch tree here - the daemon broadcasts tree.updated
-               // automatically after connecting to the VM service
-               true
-           } else {
-               false
-           };
-           
-           if !found {
-               tracing::warn!(
-                   session_id = session_id,
-                   available_sessions = ?session_ids,
-                   "Session NOT FOUND in sessions list!"
-               );
-           }
-       }
+        if let Some(status) = payload.get("status").and_then(|s| s.as_str()) {
+            match status {
+                "starting" => self.app_status = AppStatus::Starting,
+                "running" => {
+                    let pid = payload.get("pid").and_then(|p| p.as_u64()).unwrap_or(0) as u32;
+                    let uri = payload
+                        .get("vmServiceUri")
+                        .and_then(|u| u.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    self.app_status = AppStatus::Running { pid, uri };
+                    // Auto-fetch tree when app starts
+                    if self.session.tree.is_none() {
+                        self.needs_tree_fetch = true;
+                    }
+                }
+                "stopped" | "not_running" => self.app_status = AppStatus::Stopped,
+                "error" => {
+                    let error = payload
+                        .get("error")
+                        .and_then(|e| e.as_str())
+                        .unwrap_or("Unknown error")
+                        .to_string();
+                    self.app_status = AppStatus::Error(error);
+                }
+                _ => {}
+            }
+        }
     }
 
     pub fn filtered_interaction_logs(&self) -> impl Iterator<Item = &LogEntry> {
@@ -929,42 +797,20 @@ impl App {
                 return;
             }
 
-            // Check if this is a session response (from create_session or connect_session)
+            // Check if this is a session creation response
             if let Some(session) = resp.data.get("session") {
                 match serde_json::from_value::<Session>(session.clone()) {
                     Ok(parsed) => {
                         let session_id = parsed.id.clone();
-                        let is_new_session;
-                        // Update existing session or add new one
-                        if let Some(existing) = self.sessions.iter_mut().find(|s| s.id == session_id) {
-                            // Update the existing session with latest data from server
-                            tracing::info!(
-                                session_id = %session_id,
-                                old_status = %existing.app_status,
-                                new_status = %parsed.app_status,
-                                "Updating existing session from response"
-                            );
-                            existing.app_status = parsed.app_status;
-                            existing.pid = parsed.pid;
-                            existing.vm_service_uri = parsed.vm_service_uri;
-                            is_new_session = false;
-                        } else {
-                            // New session, add to list
-                            tracing::info!(session_id = %session_id, "Adding new session to list");
+                        // Add to sessions list if not already there
+                        if !self.sessions.iter().any(|s| s.id == session_id) {
                             self.sessions.push(parsed);
-                            self.push_toast(Toast::success("Session created"));
-                            is_new_session = true;
                         }
-                        // Reset state if switching to a different session
-                        let switching = self.selected_session.as_deref() != Some(&session_id);
-                        if switching || is_new_session {
-                            self.reset_session_state();
-                        }
-                        self.selected_session = Some(session_id);
-                        if let Some(idx) = self.sessions.iter().position(|s| s.id == self.selected_session.as_deref().unwrap_or_default()) {
-                            self.session_picker_index = idx;
-                        }
+                        // Auto-select the new session
+                        self.switch_to_session(session_id);
+                        self.session_picker_index = self.sessions.len().saturating_sub(1);
                         self.mode = Mode::Normal;
+                        self.push_toast(Toast::success("Session created"));
                     }
                     Err(e) => {
                         tracing::error!(?e, ?session, "Failed to parse session response");
@@ -974,25 +820,30 @@ impl App {
                 return;
             }
 
-            // Check for app status from response - update Session in sessions list
+            // Check for app status from response
             if let Some(status) = resp.data.get("status").and_then(|s| s.as_str()) {
-                if let Some(session) = self.current_session_mut() {
-                    session.app_status = status.to_string();
-                    if status == "running" {
-                        session.pid = resp.data.get("pid").and_then(|p| p.as_u64()).map(|p| p as u32);
-                        session.vm_service_uri = resp.data.get("uri").and_then(|u| u.as_str()).map(String::from);
+                match status {
+                    "starting" => self.app_status = AppStatus::Starting,
+                    "running" => {
+                        let pid = resp.data.get("pid").and_then(|p| p.as_u64()).unwrap_or(0) as u32;
+                        let uri = resp
+                            .data
+                            .get("uri")
+                            .and_then(|u| u.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        self.app_status = AppStatus::Running { pid, uri };
+                        // Auto-fetch tree when app starts
+                        if self.session.tree.is_none() {
+                            self.needs_tree_fetch = true;
+                        }
                     }
+                    "stopped" | "not_running" => self.app_status = AppStatus::Stopped,
+                    _ => {}
                 }
-                // Note: Don't auto-fetch tree - daemon broadcasts tree.updated after VM connects
             } else if resp.data.get("pid").is_some() {
-                // run_app response returns { pid, vmServiceUri } - update pid/uri but NOT status
-                // Status is already updated via session.status_changed events
-                if let Some(session) = self.current_session_mut() {
-                    session.pid = resp.data.get("pid").and_then(|p| p.as_u64()).map(|p| p as u32);
-                    if let Some(uri) = resp.data.get("vmServiceUri").and_then(|u| u.as_str()) {
-                        session.vm_service_uri = Some(uri.to_string());
-                    }
-                }
+                // run_app response returns just { pid } - treat as starting
+                self.app_status = AppStatus::Starting;
             }
         } else if let Some(err) = resp.error {
             self.push_toast(Toast::error(&err));
@@ -1005,65 +856,18 @@ impl App {
             .filter_map(|t| {
                 let id = t.get("id")?.as_str()?.to_string();
                 let widget_type = t.get("widgetType").and_then(|w| w.as_str()).map(String::from);
-                let capabilities = t
-                    .get("capabilities")
-                    .and_then(|c| c.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|cap| {
-                                // Support both formats:
-                                // - Object: {"type": "tap"}
-                                // - String: "tap"
-                                cap.get("type")
-                                    .and_then(|t| t.as_str())
-                                    .map(|s| s.to_string())
-                                    .or_else(|| cap.as_str().map(|s| s.to_string()))
-                                    .map(|s| Capability { capability_type: s })
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let actions = t
-                    .get("actions")
-                    .and_then(|a| a.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|act| {
-                                act.get("name")
-                                    .and_then(|n| n.as_str())
-                                    .map(|name| Action {
-                                        name: name.to_string(),
-                                        description: act.get("description").and_then(|d| d.as_str()).map(String::from),
-                                    })
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
                 let children = t
                     .get("children")
                     .and_then(|c| c.as_array())
                     .map(|arr| Self::parse_tree_nodes(arr))
                     .unwrap_or_default();
-                let contexts = t
-                    .get("contexts")
-                    .and_then(|c| c.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|ctx| {
-                                let name = ctx.get("name")?.as_str()?.to_string();
-                                let description = ctx.get("description").and_then(|d| d.as_str()).map(String::from);
-                                Some(ContextInfo { name, description })
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
                 Some(TreeNode {
                     id,
                     widget_type,
-                    capabilities,
-                    actions,
                     children,
-                    contexts,
+                    contexts: Vec::new(),
+                    capabilities: Vec::new(),
+                    actions: Vec::new(),
                 })
             })
             .collect()
@@ -1077,63 +881,73 @@ impl App {
 
         match resp.status {
             AgentStatus::Success => {
-                
+                self.session.conversation_id = None;
                 self.session.agent_question = None;
                 self.session.last_agent_error = None;
             }
             AgentStatus::NeedsContext => {
-                // Daemon manages session internally
+                self.session.conversation_id = resp.sdk_session_id;
                 self.session.agent_question = resp.question;
                 self.session.last_agent_error = None;
             }
             AgentStatus::Error => {
+                self.session.conversation_id = None;
                 self.session.agent_question = None;
-                let error_msg = resp.error.or(resp.summary);
-                if let Some(ref err) = error_msg {
+                if let Some(ref err) = resp.summary {
                     self.push_toast(Toast::error(err));
-                    self.session.chat_messages.push(crate::chat::ChatMessage::assistant(format!("Error: {}", err)));
                 }
-                self.session.last_agent_error = error_msg;
-                self.session.chat_streaming = None;
+                self.session.last_agent_error = resp.summary;
             }
         }
     }
 
+    pub fn in_answer_mode(&self) -> bool {
+        self.session.conversation_id.is_some()
+    }
+
+    pub fn is_app_running(&self) -> bool {
+        matches!(self.app_status, AppStatus::Running { .. } | AppStatus::Starting)
+    }
+
+    pub fn has_session(&self) -> bool {
+        self.selected_session.is_some()
+    }
+
+    /// Get the currently selected session from the sessions list
+    pub fn current_session(&self) -> Option<&Session> {
+        self.selected_session.as_ref().and_then(|id| {
+            self.sessions.iter().find(|s| &s.id == id)
+        })
+    }
+
+    /// Handle streaming agent events
     pub fn handle_agent_stream_event(&mut self, event: crate::ws::protocol::AgentStreamEvent) {
         use crate::ws::protocol::AgentEventKind;
-        use crate::chat::{ChatMessage, ChatContent, ToolCall, ToolStatus, StreamingState};
-        
-        // Ensure we have streaming state
-        if self.session.chat_streaming.is_none() {
-            self.session.chat_streaming = Some(StreamingState::default());
-        }
-        
+
         match event.event {
             AgentEventKind::TextDelta { text } => {
+                // Append text to streaming buffer
                 if let Some(streaming) = &mut self.session.chat_streaming {
                     streaming.text_buffer.push_str(&text);
                 }
             }
             AgentEventKind::ToolCallStart { tool_name, tool_call_id } => {
-                // Flush any pending text before adding tool call
-                self.flush_streaming_text();
-                
-                // Add tool call as its own message (inline with the conversation)
-                let tool_call = ToolCall {
+                // Add a tool call message
+                let tool_call = crate::chat::ToolCall {
                     id: tool_call_id,
                     name: tool_name,
                     args: serde_json::Value::Null,
-                    status: ToolStatus::Running,
+                    status: crate::chat::ToolStatus::Running,
                     output: None,
                 };
-                self.session.chat_messages.push(ChatMessage::assistant_tool(tool_call));
+                self.session.chat_messages.push(crate::chat::ChatMessage::assistant_tool(tool_call));
             }
-            AgentEventKind::ToolCallEnd { tool_call_id, result, .. } => {
-                // Find the tool call message and update its status
+            AgentEventKind::ToolCallEnd { tool_name: _, tool_call_id, result } => {
+                // Update the tool call message with result
                 for msg in self.session.chat_messages.iter_mut().rev() {
-                    if let ChatContent::ToolCall(ref mut call) = msg.content {
+                    if let crate::chat::ChatContent::ToolCall(call) = &mut msg.content {
                         if call.id == tool_call_id {
-                            call.status = ToolStatus::Success;
+                            call.status = crate::chat::ToolStatus::Success;
                             call.output = result;
                             break;
                         }
@@ -1141,101 +955,29 @@ impl App {
                 }
             }
             AgentEventKind::TaskComplete { summary: _ } => {
-                // Flush any remaining text
-                self.flush_streaming_text();
-                self.session.chat_streaming = None;
+                // Finalize streaming - convert buffer to message
+                if let Some(streaming) = self.session.chat_streaming.take() {
+                    if !streaming.text_buffer.is_empty() {
+                        self.session.chat_messages.push(crate::chat::ChatMessage::assistant(&streaming.text_buffer));
+                    }
+                }
                 self.session.pending_response = false;
             }
             AgentEventKind::Error { message } => {
-                self.flush_streaming_text();
                 self.session.chat_streaming = None;
                 self.session.pending_response = false;
-                self.session.chat_messages.push(ChatMessage::assistant(format!("Error: {message}")));
+                self.session.last_agent_error = Some(message.clone());
                 self.push_toast(Toast::error(&message));
             }
         }
     }
-    
-    /// Flush any pending streaming text to a message
-    fn flush_streaming_text(&mut self) {
-        if let Some(streaming) = &mut self.session.chat_streaming {
-            if !streaming.text_buffer.is_empty() {
-                let text = std::mem::take(&mut streaming.text_buffer);
-                self.session.chat_messages.push(crate::chat::ChatMessage::assistant(text));
-            }
-        }
-    }
-    pub fn in_answer_mode(&self) -> bool {
-        self.session.agent_question.is_some()
-    }
-
-    pub fn is_app_running(&self) -> bool {
-        self.current_session()
-            .map(|s| matches!(s.app_status.as_str(), "running" | "starting"))
-            .unwrap_or(false)
-    }
-
-    pub fn has_session(&self) -> bool {
-        self.selected_session.is_some()
-    }
 
     pub fn cancel_answer_mode(&mut self) {
-        
+        self.session.conversation_id = None;
         self.session.agent_question = None;
     }
 
-    pub fn scroll_up(&mut self) {
-        if self.content_tab == ContentTab::Flutter {
-            let count = self.current_log_count();
-            self.log_view.cursor_up(self.log_viewport_height);
-            self.log_view.clamp_cursor(count);
-        } else {
-            self.scroll_offset = self.scroll_offset.saturating_sub(1);
-        }
-    }
-
-    pub fn scroll_down(&mut self) {
-        if self.content_tab == ContentTab::Flutter {
-            let count = self.current_log_count();
-            self.log_view.cursor_down(count, self.log_viewport_height);
-        } else {
-            let event_count = match self.content_tab {
-                ContentTab::Flutter => 0, // Handled above
-                ContentTab::Agent => self.filtered_agent_events().count(),
-                ContentTab::Interactions => self.filtered_interaction_logs().count(),
-                ContentTab::Tree => return, // Tree uses tree_state navigation
-            };
-            if event_count > 0 && self.scroll_offset < event_count - 1 {
-                self.scroll_offset += 1;
-            }
-        }
-    }
-
-    pub fn scroll_to_top(&mut self) {
-        self.log_view.cursor_top();
-        self.scroll_offset = 0;
-    }
-
-    pub fn scroll_to_bottom(&mut self) {
-        let count = self.current_log_count();
-        self.log_view.cursor_bottom(count, self.log_viewport_height);
-        if count > 0 {
-            self.scroll_offset = count.saturating_sub(1);
-        }
-    }
-
-    pub fn toggle_visual_mode(&mut self) {
-        self.log_view.toggle_visual();
-    }
-
-    pub fn exit_visual_mode(&mut self) {
-        self.log_view.exit_visual();
-    }
-
-    pub fn in_visual_mode(&self) -> bool {
-        self.log_view.mode == LogViewMode::Visual
-    }
-
+    /// Get the count of log lines for the current tab
     pub fn current_log_count(&self) -> usize {
         match self.content_tab {
             ContentTab::Flutter => self.filtered_flutter_logs().count(),
@@ -1245,35 +987,106 @@ impl App {
         }
     }
 
+    pub fn scroll_up(&mut self) {
+        let count = self.current_log_count();
+        self.log_view.clamp_cursor(count);
+        self.log_view.cursor_up(self.log_viewport_height);
+        // Keep scroll_offset in sync for backward compat
+        self.scroll_offset = self.log_view.scroll;
+    }
+
+    pub fn scroll_down(&mut self) {
+        let count = self.current_log_count();
+        if count == 0 {
+            return;
+        }
+        self.log_view.clamp_cursor(count);
+        self.log_view.cursor_down(count, self.log_viewport_height);
+        // Keep scroll_offset in sync for backward compat
+        self.scroll_offset = self.log_view.scroll;
+    }
+
+    pub fn scroll_to_top(&mut self) {
+        self.log_view.cursor_top();
+        self.scroll_offset = self.log_view.scroll;
+    }
+
+    pub fn scroll_to_bottom(&mut self) {
+        let count = self.current_log_count();
+        self.log_view.cursor_bottom(count, self.log_viewport_height);
+        self.scroll_offset = self.log_view.scroll;
+    }
+
+    /// Toggle visual line selection mode
+    pub fn toggle_visual_mode(&mut self) {
+        self.log_view.toggle_visual();
+    }
+
+    /// Exit visual mode without yanking
+    pub fn exit_visual_mode(&mut self) {
+        self.log_view.exit_visual();
+    }
+
+    /// Check if in visual mode
+    pub fn in_visual_mode(&self) -> bool {
+        self.log_view.mode == LogViewMode::Visual
+    }
+
+    /// Yank selected lines (or current line if not in visual mode) to clipboard
+    /// Returns the yanked text
     pub fn yank_logs(&mut self) -> Option<String> {
-        if self.content_tab != ContentTab::Flutter {
-            return None;
-        }
-
-        let logs: Vec<&FlutterLogEntry> = self.filtered_flutter_logs().collect();
-        if logs.is_empty() {
-            return None;
-        }
-
-        let text = if self.in_visual_mode() {
-            if let Some((start, end)) = self.log_view.selection_range() {
-                let lines: Vec<String> = logs
-                    .into_iter()
-                    .enumerate()
-                    .filter(|(i, _)| *i >= start && *i <= end)
-                    .map(|(_, log)| log.to_plain_text())
-                    .collect();
-                self.exit_visual_mode();
-                if lines.is_empty() { None } else { Some(lines.join("
-")) }
-            } else {
-                None
-            }
+        let (start, end) = if self.log_view.mode == LogViewMode::Visual {
+            self.log_view.selection_range()?
         } else {
-            logs.get(self.log_view.cursor).map(|log| log.to_plain_text())
+            // Yank current line only
+            (self.log_view.cursor, self.log_view.cursor)
         };
 
-        text
+        let text = match self.content_tab {
+            ContentTab::Flutter => {
+                let logs: Vec<_> = self.filtered_flutter_logs().collect();
+                logs.iter()
+                    .skip(start)
+                    .take(end - start + 1)
+                    .map(|e| e.to_plain_text())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+            ContentTab::Agent => {
+                let logs: Vec<_> = self.filtered_agent_events().collect();
+                logs.iter()
+                    .skip(start)
+                    .take(end - start + 1)
+                    .map(|e| format!("[{}] {}: {}", e.ts, e.event_type, e.payload))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+            ContentTab::Interactions => {
+                let logs: Vec<_> = self.filtered_interaction_logs().collect();
+                logs.iter()
+                    .skip(start)
+                    .take(end - start + 1)
+                    .map(|e| format!("[{}] {}", e.ts, e.message))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+            ContentTab::Tree => return None,
+        };
+
+        // Exit visual mode after yanking
+        self.log_view.exit_visual();
+
+        if text.is_empty() {
+            None
+        } else {
+            Some(text)
+        }
+    }
+
+    /// Reset log view state (when switching tabs)
+    pub fn reset_log_view(&mut self) {
+        self.log_view = LogViewState::new();
+        self.scroll_offset = 0;
     }
 
     pub fn tree_up(&mut self) {
@@ -1301,16 +1114,16 @@ impl App {
     }
 
     pub fn clear_events(&mut self) {
-        self.session.flutter_logs.clear();
-        self.session.agent_events.clear();
-        self.session.interaction_logs.clear();
+        self.session.clear();
         self.scroll_offset = 0;
     }
 
     pub fn set_sessions(&mut self, sessions: Vec<Session>) {
         self.sessions = sessions;
         if self.selected_session.is_none() && !self.sessions.is_empty() {
-            self.selected_session = Some(self.sessions[0].id.clone());
+            let first_session = self.sessions[0].clone();
+            self.switch_to_session(first_session.id.clone());
+            self.update_status_from_session(&first_session);
         }
     }
 
@@ -1326,24 +1139,26 @@ impl App {
         }
     }
 
-    /// Select a session from the picker. Returns true if a different session was selected.
-    pub fn session_picker_select(&mut self) -> bool {
-        let Some(session) = self.sessions.get(self.session_picker_index).cloned() else {
-            self.mode = Mode::Normal;
-            return false;
-        };
-
-        // Check if selecting the same session - no-op
-        if self.selected_session.as_deref() == Some(&session.id) {
-            self.mode = Mode::Normal;
-            return false;
+    pub fn session_picker_select(&mut self) {
+        if let Some(session) = self.sessions.get(self.session_picker_index).cloned() {
+            self.switch_to_session(session.id.clone());
+            self.update_status_from_session(&session);
         }
-
-        // Switching to a different session - reset all session state
-        self.reset_session_state();
-        self.selected_session = Some(session.id.clone());
         self.mode = Mode::Normal;
-        true
+    }
+
+    pub fn update_status_from_session(&mut self, session: &crate::ws::protocol::Session) {
+        match session.app_status.as_str() {
+            "starting" => self.app_status = AppStatus::Starting,
+            "running" => {
+                let pid = session.pid.unwrap_or(0);
+                let uri = session.vm_service_uri.clone().unwrap_or_default();
+                self.app_status = AppStatus::Running { pid, uri };
+            }
+            "stopped" | "not_running" => self.app_status = AppStatus::Stopped,
+            "error" => self.app_status = AppStatus::Error("Unknown error".to_string()),
+            _ => self.app_status = AppStatus::Unknown,
+        }
     }
 
     pub fn next_tab(&mut self) {
@@ -1379,34 +1194,6 @@ fn summarize_payload(payload: &serde_json::Value) -> String {
         serde_json::Value::Array(arr) => format!("[{} items]", arr.len()),
         other => truncate(&other.to_string(), 80),
     }
-}
-
-fn format_interaction_event(payload: &serde_json::Value) -> String {
-    let id = payload.get("id").and_then(|v| v.as_str()).unwrap_or("?");
-    let interaction = payload.get("interaction").and_then(|v| v.as_str()).unwrap_or("?");
-    let result = payload.get("result").and_then(|v| v.as_object());
-    
-    let success = result
-        .and_then(|r| r.get("success"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    
-    let status = if success { "✓" } else { "✗" };
-    
-    // Include args if present (e.g., text for enterText)
-    let args_str = if let Some(args) = payload.get("args").and_then(|v| v.as_object()) {
-        if let Some(text) = args.get("text").and_then(|v| v.as_str()) {
-            format!(" \"{}\"", truncate(text, 20))
-        } else if args.is_empty() {
-            String::new()
-        } else {
-            format!(" {:?}", args.keys().collect::<Vec<_>>())
-        }
-    } else {
-        String::new()
-    };
-    
-    format!("{} {}({}){}",status, interaction, id, args_str)
 }
 
 fn extract_flutter_log(payload: &serde_json::Value) -> String {
@@ -1446,28 +1233,6 @@ mod tests {
             event_type: event_type.to_string(),
             payload: serde_json::Value::Null,
         }
-    }
-
-    fn test_session() -> Session {
-        Session {
-            id: "test-session-1".to_string(),
-            name: "test".to_string(),
-            project_path: "/test/project".to_string(),
-            app_status: "not_running".to_string(),
-            vm_service_uri: None,
-            pid: None,
-            connected_clients: vec![],
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            last_active_at: "2024-01-01T00:00:00Z".to_string(),
-        }
-    }
-
-    fn app_with_session() -> App {
-        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
-        app.sessions.push(test_session());
-        app.selected_session = Some("test-session-1".to_string());
-        app.mode = Mode::Normal;
-        app
     }
 
     #[test]
@@ -1523,7 +1288,7 @@ mod tests {
 
     #[test]
     fn test_handle_command_response_running() {
-        let mut app = app_with_session();
+        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
         let resp = CommandResponse {
             id: "1".to_string(),
             success: true,
@@ -1532,10 +1297,13 @@ mod tests {
         };
 
         app.handle_command_response(resp);
-        let session = app.current_session().expect("should have session");
-        assert_eq!(session.app_status, "running");
-        assert_eq!(session.pid, Some(1234));
-        assert_eq!(session.vm_service_uri.as_deref(), Some("ws://127.0.0.1:5678"));
+        match app.app_status {
+            AppStatus::Running { pid, uri } => {
+                assert_eq!(pid, 1234);
+                assert_eq!(uri, "ws://127.0.0.1:5678");
+            }
+            _ => panic!("Expected Running status"),
+        }
     }
 
     #[test]
@@ -1547,28 +1315,34 @@ mod tests {
             id: "1".to_string(),
             status: AgentStatus::NeedsContext,
             summary: None,
-            question: Some("Which button?".to_string()), sdk_session_id: None,
+            error: None,
+            question: Some("Which button?".to_string()),
+            sdk_session_id: Some("conv-123".to_string()),
         };
 
         app.handle_agent_response(resp);
         assert!(!app.session.pending_response);
+        assert_eq!(app.session.conversation_id, Some("conv-123".to_string()));
     }
 
     #[test]
     fn test_handle_agent_response_success_clears_conversation() {
         let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
+        app.session.conversation_id = Some("conv-123".to_string());
         app.session.pending_response = true;
 
         let resp = AgentResponse {
             id: "1".to_string(),
             status: AgentStatus::Success,
             summary: Some("Done".to_string()),
-            question: None, sdk_session_id: None,
-            
+            error: None,
+            question: None,
+            sdk_session_id: None,
         };
 
         app.handle_agent_response(resp);
         assert!(!app.session.pending_response);
+        assert!(app.session.conversation_id.is_none());
     }
 
     #[test]
@@ -1580,8 +1354,9 @@ mod tests {
             id: "1".to_string(),
             status: AgentStatus::Success,
             summary: Some("Task completed".to_string()),
-            question: None, sdk_session_id: None,
-            
+            error: None,
+            question: None,
+            sdk_session_id: None,
         };
 
         app.handle_agent_response(resp);
@@ -1600,12 +1375,14 @@ mod tests {
             id: "1".to_string(),
             status: AgentStatus::Error,
             summary: Some("Something went wrong".to_string()),
-            question: None, sdk_session_id: None,
-            
+            error: None,
+            question: None,
+            sdk_session_id: None,
         };
 
         app.handle_agent_response(resp);
         assert_eq!(app.session.last_agent_error, Some("Something went wrong".to_string()));
+        assert!(app.session.conversation_id.is_none());
     }
 
     #[test]
@@ -1645,64 +1422,6 @@ mod tests {
 
         // Toast should be shown (can't easily check content, but toasts queue should have one)
         assert_eq!(app.toasts.len(), 1);
-    }
-
-    #[test]
-    fn test_create_session_clears_old_logs() {
-        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
-        
-        // Setup: have an existing session with logs
-        app.sessions.push(Session {
-            id: "old-session".to_string(),
-            name: "old".to_string(),
-            project_path: "/old".to_string(),
-            app_status: "running".to_string(),
-            vm_service_uri: None,
-            pid: None,
-            connected_clients: Vec::new(),
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            last_active_at: "2024-01-01T00:00:00Z".to_string(),
-        });
-        app.selected_session = Some("old-session".to_string());
-        app.mode = Mode::Normal;
-        
-        // Add some logs to the old session
-        app.push_interaction_log(LogEntry {
-            ts: "2024-01-01T00:00:00Z".to_string(),
-            level: LogLevel::Info,
-            message: "old session log".to_string(),
-        });
-        app.session.agent_events.push_back(make_event("agent", "tool_call"));
-        
-        assert!(!app.session.interaction_logs.is_empty());
-        assert!(!app.session.agent_events.is_empty());
-        
-        // Now create a new session
-        let resp = CommandResponse {
-            id: "1".to_string(),
-            success: true,
-            data: serde_json::json!({
-                "session": {
-                    "id": "new-session",
-                    "name": "new",
-                    "projectPath": "/new",
-                    "appStatus": "not_running",
-                    "createdAt": "2024-01-01T00:00:00Z",
-                    "lastActiveAt": "2024-01-01T00:00:00Z"
-                }
-            }),
-            error: None,
-        };
-        
-        app.handle_command_response(resp);
-        
-        // Session should be switched
-        assert_eq!(app.selected_session, Some("new-session".to_string()));
-        
-        // Old logs should be cleared
-        assert!(app.session.interaction_logs.is_empty(), "interaction_logs should be cleared");
-        assert!(app.session.agent_events.is_empty(), "agent_events should be cleared");
-        assert!(app.session.flutter_logs.is_empty(), "flutter_logs should be cleared");
     }
 
     #[test]
@@ -1909,303 +1628,5 @@ mod tests {
         assert_eq!(app.sessions.len(), 1);
         assert_eq!(app.sessions[0].id, "sess-new");
         assert_eq!(app.sessions[0].name, "new-app");
-    }
-
-    #[test]
-    fn test_session_switch_clears_logs() {
-        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
-        app.set_sessions(vec![
-            Session {
-                id: "sess-1".to_string(),
-                name: "app1".to_string(),
-                project_path: "/path/1".to_string(),
-                app_status: "running".to_string(),
-                vm_service_uri: None,
-                pid: None,
-                connected_clients: Vec::new(),
-                created_at: "2024-01-01T00:00:00Z".to_string(),
-                last_active_at: "2024-01-01T00:00:00Z".to_string(),
-            },
-            Session {
-                id: "sess-2".to_string(),
-                name: "app2".to_string(),
-                project_path: "/path/2".to_string(),
-                app_status: "not_running".to_string(),
-                vm_service_uri: None,
-                pid: None,
-                connected_clients: Vec::new(),
-                created_at: "2024-01-01T00:00:00Z".to_string(),
-                last_active_at: "2024-01-01T00:00:00Z".to_string(),
-            },
-        ]);
-
-        // Add some logs to session 1
-        app.push_flutter_log(crate::flutter_log::FlutterLogEntry::parse("Log line 1"));
-        app.push_flutter_log(crate::flutter_log::FlutterLogEntry::parse("Log line 2"));
-        app.push_interaction_log(LogEntry {
-            ts: "2024-01-01T00:00:00Z".to_string(),
-            level: LogLevel::Info,
-            message: "Interaction 1".to_string(),
-        });
-        app.scroll_offset = 5;
-
-        assert_eq!(app.session.flutter_logs.len(), 2);
-        assert_eq!(app.session.interaction_logs.len(), 1);
-
-        // Switch to session 2
-        app.session_picker_index = 1;
-        let switched = app.session_picker_select();
-
-        assert!(switched);
-        assert_eq!(app.selected_session, Some("sess-2".to_string()));
-
-        // Logs should be cleared
-        assert!(app.session.flutter_logs.is_empty());
-        assert!(app.session.interaction_logs.is_empty());
-        assert!(app.session.agent_events.is_empty());
-        assert_eq!(app.scroll_offset, 0);
-    }
-
-    #[test]
-    fn test_selecting_same_session_does_nothing() {
-        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
-        app.set_sessions(vec![Session {
-            id: "sess-1".to_string(),
-            name: "app1".to_string(),
-            project_path: "/path/1".to_string(),
-            app_status: "running".to_string(),
-            vm_service_uri: None,
-            pid: None,
-            connected_clients: Vec::new(),
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            last_active_at: "2024-01-01T00:00:00Z".to_string(),
-        }]);
-
-        // Add some logs
-        app.push_flutter_log(crate::flutter_log::FlutterLogEntry::parse("Log line 1"));
-        app.push_flutter_log(crate::flutter_log::FlutterLogEntry::parse("Log line 2"));
-
-        assert_eq!(app.session.flutter_logs.len(), 2);
-        assert_eq!(app.selected_session, Some("sess-1".to_string()));
-
-        // Try to select the same session
-        app.session_picker_index = 0;
-        let switched = app.session_picker_select();
-
-        // Should return false and NOT clear logs
-        assert!(!switched);
-        assert_eq!(app.session.flutter_logs.len(), 2);
-        assert_eq!(app.selected_session, Some("sess-1".to_string()));
-    }
-
-    #[test]
-    fn test_reset_session_state_clears_all() {
-        let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
-
-        // Set up various TUI-local session state (app_status now lives in Session struct)
-        app.push_flutter_log(crate::flutter_log::FlutterLogEntry::parse("Log"));
-        app.push_agent_event(MonitoringEvent {
-            ts: "2024-01-01T00:00:00Z".to_string(),
-            source: "agent".to_string(),
-            event_type: "test".to_string(),
-            payload: serde_json::Value::Null,
-        });
-        app.session.pending_response = true;
-        app.filter = Some("filter".to_string());
-        app.scroll_offset = 10;
-
-        // Reset
-        app.reset_session_state();
-
-        // Verify TUI-local state is cleared
-        assert!(app.session.flutter_logs.is_empty());
-        assert!(app.session.agent_events.is_empty());
-        assert!(app.session.interaction_logs.is_empty());
-        assert!(app.session.tree.is_none());
-        assert!(!app.session.pending_response);
-        assert!(app.filter.is_none());
-        assert_eq!(app.scroll_offset, 0);
-    }
-
-    #[test]
-    fn test_session_status_event_updates_to_running() {
-        let mut app = app_with_session();
-        
-        // Verify initial state
-        let session = app.current_session().expect("should have session");
-        assert_eq!(session.app_status, "not_running");
-        assert_eq!(session.pid, None);
-        assert_eq!(session.vm_service_uri, None);
-
-        // Simulate session.status_changed event with "starting"
-        let starting_event = MonitoringEvent {
-            ts: "2024-01-01T00:00:01Z".to_string(),
-            source: "session".to_string(),
-            event_type: "session.status_changed".to_string(),
-            payload: serde_json::json!({
-                "sessionId": "test-session-1",
-                "status": "starting"
-            }),
-        };
-        app.push_event(starting_event);
-
-        // Verify status changed to starting
-        let session = app.current_session().expect("should have session");
-        assert_eq!(session.app_status, "starting", "status should be 'starting' after starting event");
-
-        // Simulate session.status_changed event with "running" + pid + vmServiceUri
-        let running_event = MonitoringEvent {
-            ts: "2024-01-01T00:00:02Z".to_string(),
-            source: "session".to_string(),
-            event_type: "session.status_changed".to_string(),
-            payload: serde_json::json!({
-                "sessionId": "test-session-1",
-                "status": "running",
-                "pid": 12345,
-                "vmServiceUri": "ws://127.0.0.1:5678/abc=/ws"
-            }),
-        };
-        app.push_event(running_event);
-
-        // Verify status changed to running with pid and uri
-        let session = app.current_session().expect("should have session");
-        assert_eq!(session.app_status, "running", "status should be 'running' after running event");
-        assert_eq!(session.pid, Some(12345), "pid should be set");
-        assert_eq!(session.vm_service_uri, Some("ws://127.0.0.1:5678/abc=/ws".to_string()), "vmServiceUri should be set");
-    }
-
-    #[test]
-    fn test_session_status_event_for_different_session_still_updates() {
-        let mut app = app_with_session();
-        
-        // Add a second session
-        let mut session2 = test_session();
-        session2.id = "test-session-2".to_string();
-        session2.name = "other".to_string();
-        app.sessions.push(session2);
-
-        // Selected session is still test-session-1
-        assert_eq!(app.selected_session, Some("test-session-1".to_string()));
-
-        // Send status event for session 2 (not selected)
-        let event = MonitoringEvent {
-            ts: "2024-01-01T00:00:01Z".to_string(),
-            source: "session".to_string(),
-            event_type: "session.status_changed".to_string(),
-            payload: serde_json::json!({
-                "sessionId": "test-session-2",
-                "status": "running",
-                "pid": 9999
-            }),
-        };
-        app.push_event(event);
-
-        // Session 2 should be updated even though it's not selected
-        let session2 = app.sessions.iter().find(|s| s.id == "test-session-2").unwrap();
-        assert_eq!(session2.app_status, "running", "non-selected session should still be updated");
-        assert_eq!(session2.pid, Some(9999));
-
-        // Selected session should be unchanged
-        let session1 = app.current_session().unwrap();
-        assert_eq!(session1.app_status, "not_running");
-    }
-
-    #[test]
-    fn test_parse_tree_nodes_string_capabilities() {
-        // Daemon sends capabilities as array of strings: ["tap", "longPress"]
-        let json = serde_json::json!([
-            {
-                "id": "my-button",
-                "widgetType": "ElevatedButton",
-                "capabilities": ["tap", "longPress", "doubleTap"],
-                "actions": [],
-                "children": []
-            }
-        ]);
-
-        let nodes = App::parse_tree_nodes(json.as_array().unwrap());
-
-        assert_eq!(nodes.len(), 1);
-        assert_eq!(nodes[0].id, "my-button");
-        assert_eq!(nodes[0].capabilities.len(), 3);
-        assert_eq!(nodes[0].capabilities[0].capability_type, "tap");
-        assert_eq!(nodes[0].capabilities[1].capability_type, "longPress");
-        assert_eq!(nodes[0].capabilities[2].capability_type, "doubleTap");
-    }
-
-    #[test]
-    fn test_parse_tree_nodes_object_capabilities() {
-        // Also support object format: [{type: "tap"}]
-        let json = serde_json::json!([
-            {
-                "id": "my-button",
-                "capabilities": [{"type": "tap"}, {"type": "scroll"}],
-                "children": []
-            }
-        ]);
-
-        let nodes = App::parse_tree_nodes(json.as_array().unwrap());
-
-        assert_eq!(nodes.len(), 1);
-        assert_eq!(nodes[0].capabilities.len(), 2);
-        assert_eq!(nodes[0].capabilities[0].capability_type, "tap");
-        assert_eq!(nodes[0].capabilities[1].capability_type, "scroll");
-    }
-
-    #[test]
-    fn test_parse_tree_nodes_with_actions() {
-        let json = serde_json::json!([
-            {
-                "id": "item",
-                "capabilities": ["tap"],
-                "actions": [
-                    {"name": "delete", "description": "Delete this item"},
-                    {"name": "edit"}
-                ],
-                "children": []
-            }
-        ]);
-
-        let nodes = App::parse_tree_nodes(json.as_array().unwrap());
-
-        assert_eq!(nodes.len(), 1);
-        assert_eq!(nodes[0].actions.len(), 2);
-        assert_eq!(nodes[0].actions[0].name, "delete");
-        assert_eq!(nodes[0].actions[0].description, Some("Delete this item".to_string()));
-        assert_eq!(nodes[0].actions[1].name, "edit");
-        assert_eq!(nodes[0].actions[1].description, None);
-    }
-
-    #[test]
-    fn test_parse_tree_nodes_nested_children() {
-        let json = serde_json::json!([
-            {
-                "id": "list",
-                "capabilities": ["scroll"],
-                "children": [
-                    {
-                        "id": "item-1",
-                        "capabilities": ["tap", "longPress"],
-                        "children": []
-                    },
-                    {
-                        "id": "item-2", 
-                        "capabilities": ["tap"],
-                        "children": []
-                    }
-                ]
-            }
-        ]);
-
-        let nodes = App::parse_tree_nodes(json.as_array().unwrap());
-
-        assert_eq!(nodes.len(), 1);
-        assert_eq!(nodes[0].id, "list");
-        assert_eq!(nodes[0].capabilities.len(), 1);
-        assert_eq!(nodes[0].children.len(), 2);
-        assert_eq!(nodes[0].children[0].id, "item-1");
-        assert_eq!(nodes[0].children[0].capabilities.len(), 2);
-        assert_eq!(nodes[0].children[1].id, "item-2");
-        assert_eq!(nodes[0].children[1].capabilities.len(), 1);
     }
 }

@@ -54,12 +54,39 @@ fn render_chat(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
     
-    // If no messages yet, show hint
+    // If no messages yet, show welcome
     if app.session.chat_messages.is_empty() && app.session.chat_streaming.is_none() {
+        all_lines.push(Line::from(Span::styled(
+            "AI Agent",
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+        )));
+        all_lines.push(Line::default());
+        all_lines.push(Line::from(Span::styled(
+            "Chat with Claude to interact with your Flutter app.",
+            Style::default().fg(t.text_dim),
+        )));
+        all_lines.push(Line::default());
+        all_lines.push(Line::from(Span::styled(
+            "Examples:",
+            Style::default().fg(t.text_dim),
+        )));
+        all_lines.push(Line::from(Span::styled(
+            "  • \"Tap the login button\"",
+            Style::default().fg(t.text_dim),
+        )));
+        all_lines.push(Line::from(Span::styled(
+            "  • \"Enter 'test@example.com' in the email field\"",
+            Style::default().fg(t.text_dim),
+        )));
+        all_lines.push(Line::from(Span::styled(
+            "  • \"Scroll down and find the settings\"",
+            Style::default().fg(t.text_dim),
+        )));
+        all_lines.push(Line::default());
         all_lines.push(Line::from(vec![
             Span::styled("Press ", Style::default().fg(t.text_dim)),
             Span::styled("Enter", Style::default().fg(t.text_highlight).add_modifier(Modifier::BOLD)),
-            Span::styled(" to start chatting with Claude", Style::default().fg(t.text_dim)),
+            Span::styled(" to start typing", Style::default().fg(t.text_dim)),
         ]));
     }
     

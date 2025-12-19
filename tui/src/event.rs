@@ -688,7 +688,7 @@ async fn handle_agent_chat_mode(
                     app.session.chat_streaming = Some(crate::chat::StreamingState::default());
                 }
                 
-                app.mode = Mode::Normal;
+                // Stay in AgentChat mode for follow-up messages
             }
         }
         KeyCode::Char(c) => {
