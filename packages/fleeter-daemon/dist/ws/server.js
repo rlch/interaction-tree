@@ -283,8 +283,8 @@ export class DaemonServer {
                         return;
                     }
                     const options = data;
-                    const tree = await service.getTree({ includeWidgetType: true, summaryOnly: options?.summaryOnly });
-                    sendResponse({ success: true, data: { tree } });
+                    const targets = await service.getTree({ includeWidgetType: true, summaryOnly: options?.summaryOnly });
+                    sendResponse({ success: true, data: { targets } });
                     break;
                 }
                 case 'get_logs': {

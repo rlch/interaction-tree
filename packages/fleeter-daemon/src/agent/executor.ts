@@ -582,6 +582,7 @@ export async function executeAgent(
       sessionId,
     };
   } catch (err) {
+    console.error('[agent] executeAgent error:', err);
     const errorMsg = err instanceof Error ? err.message : String(err);
     onEvent?.({ event: { kind: 'error', message: errorMsg } });
     return {

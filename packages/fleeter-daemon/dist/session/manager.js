@@ -134,6 +134,23 @@ export class SessionManager extends EventEmitter {
         this.emit('session:status_changed', this.toInfo(session));
     }
     /**
+     * Update session when VM client disconnects (but process may still be running).
+     * This happens during hot restart or if VM service crashes.
+     */
+    updateVmDisconnected(sessionId) {
+        const session = this.get(sessionId);
+        if (!session) {
+            console.error(`[session-manager] updateVmDisconnected: session not found for ${sessionId}`);
+            return;
+        }
+        console.error(`[session-manager] updateVmDisconnected: ${session.name}`);
+        // Clear vmServiceUri but keep status as "running" if process is still alive
+        // The Flutter process might be restarting and will reconnect
+        session.vmServiceUri = undefined;
+        session.lastActiveAt = new Date();
+        this.emit('session:status_changed', this.toInfo(session));
+    }
+    /**
      * Add a log line to a session. Logs persist across process restarts.
      */
     addLog(sessionId, line) {

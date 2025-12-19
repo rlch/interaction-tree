@@ -84,11 +84,13 @@ export class DaemonClient {
             throw new Error('Not connected to daemon');
         }
         const id = uuidv4();
+        // run_app can take a long time for cold builds
+        const timeoutMs = action === 'run_app' ? 300000 : 30000;
         return new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
                 this.pendingRequests.delete(id);
                 reject(new Error('Request timeout'));
-            }, 30000);
+            }, timeoutMs);
             this.pendingRequests.set(id, { resolve, reject, timeout });
             this.ws.send(JSON.stringify({
                 type: 'command',

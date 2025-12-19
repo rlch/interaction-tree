@@ -46,6 +46,11 @@ export declare class SessionManager extends EventEmitter {
         error?: string;
     }): void;
     /**
+     * Update session when VM client disconnects (but process may still be running).
+     * This happens during hot restart or if VM service crashes.
+     */
+    updateVmDisconnected(sessionId: string): void;
+    /**
      * Add a log line to a session. Logs persist across process restarts.
      */
     addLog(sessionId: string, line: string): void;

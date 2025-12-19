@@ -15,10 +15,10 @@ const LOGS_DIR = join(FLEETER_DIR, 'logs');
 const PLIST_PATH = join(LAUNCH_AGENTS_DIR, PLIST_NAME);
 
 async function main() {
-  // Find bun executable
-  const bunPath = Bun.which('bun');
-  if (!bunPath) {
-    console.error('Error: bun not found in PATH');
+  // Find node executable (bun has compatibility issues with claude-agent-sdk)
+  const nodePath = Bun.which('node');
+  if (!nodePath) {
+    console.error('Error: node not found in PATH');
     process.exit(1);
   }
 
@@ -60,7 +60,7 @@ async function main() {
     <string>com.fleeter.daemon</string>
     <key>ProgramArguments</key>
     <array>
-        <string>${bunPath}</string>
+        <string>${nodePath}</string>
         <string>${daemonScript}</string>
     </array>
     <key>RunAtLoad</key>

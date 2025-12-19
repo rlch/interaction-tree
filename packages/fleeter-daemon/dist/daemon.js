@@ -47,8 +47,8 @@ export class Daemon {
         this.flutterManager.on('started', async (sessionId, vmServiceUri) => {
             log.daemon.info({ sessionId, vmServiceUri }, 'Flutter started event received');
             log.daemon.debug({ sessionId, vmServiceUriLength: vmServiceUri?.length, vmServiceUriType: typeof vmServiceUri }, 'vmServiceUri details');
-            this.sessionManager.updateStatus(sessionId, 'running', { vmServiceUri });
-            // Connect VM client
+            // Connect VM client BEFORE broadcasting status to avoid race condition
+            // where TUI tries to get_tree before VM is connected
             log.daemon.debug({ sessionId }, 'Creating new VMServiceClient');
             const vmClient = new VMServiceClient();
             try {
@@ -65,10 +65,26 @@ export class Daemon {
                 else {
                     log.daemon.warn({ sessionId }, 'SessionService not found when VM connected');
                 }
+                // Handle VM client disconnection (e.g., hot restart, app crash)
+                vmClient.on('close', () => {
+                    log.daemon.warn({ sessionId }, 'VM client disconnected');
+                    this.vmClients.delete(sessionId);
+                    const service = this.server.getSessionService(sessionId);
+                    if (service) {
+                        service.clearVmClient();
+                    }
+                    // Notify TUI clients that VM is no longer connected
+                    // The session still exists but vmServiceUri should be cleared
+                    this.sessionManager.updateVmDisconnected(sessionId);
+                });
                 log.daemon.info({ sessionId, vmClientsCount: this.vmClients.size, vmClientsKeys: Array.from(this.vmClients.keys()) }, 'VM client added to vmClients map');
+                // NOW broadcast the status - VM is connected and ready
+                this.sessionManager.updateStatus(sessionId, 'running', { vmServiceUri });
             }
             catch (err) {
                 log.daemon.error({ sessionId, err, errMessage: err instanceof Error ? err.message : String(err), errStack: err instanceof Error ? err.stack : undefined }, 'Failed to connect VM client');
+                // Still set running status but without vmServiceUri so TUI knows something went wrong
+                this.sessionManager.updateStatus(sessionId, 'running');
             }
         });
         this.flutterManager.on('exit', (sessionId) => {

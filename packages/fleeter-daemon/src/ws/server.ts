@@ -339,8 +339,8 @@ export class DaemonServer {
             return;
           }
           const options = data as { summaryOnly?: boolean } | undefined;
-          const tree = await service.getTree({ includeWidgetType: true, summaryOnly: options?.summaryOnly });
-          sendResponse({ success: true, data: { tree } });
+          const targets = await service.getTree({ includeWidgetType: true, summaryOnly: options?.summaryOnly });
+          sendResponse({ success: true, data: { targets } });
           break;
         }
 

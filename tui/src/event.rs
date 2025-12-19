@@ -67,10 +67,17 @@ async fn run_event_loop(
         }
     };
 
+    let mut last_throbber_tick = std::time::Instant::now();
+    
     loop {
-        // Expire old toasts and tick throbber
+        // Expire old toasts
         app.expire_toasts();
-        app.throbber_state.calc_next();
+        
+        // Tick throbber at ~10 FPS (not every frame)
+        if last_throbber_tick.elapsed() >= Duration::from_millis(100) {
+            app.throbber_state.calc_next();
+            last_throbber_tick = std::time::Instant::now();
+        }
 
         // Auto-fetch tree if needed
         if app.needs_tree_fetch {
@@ -179,7 +186,6 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) {
 async fn handle_normal_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>) -> Result<()> {
     // Tree tab has special navigation (tree_up/down instead of scroll)
     let on_tree_tab = app.content_tab == ContentTab::Tree;
-    let on_agent_tab = app.content_tab == ContentTab::Agent;
 
     match key.code {
         KeyCode::Char('q') => {
@@ -228,8 +234,6 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>)
         KeyCode::Char('j') | KeyCode::Down => {
             if on_tree_tab {
                 app.tree_down();
-            } else if on_agent_tab {
-                app.chat_scroll_down();
             } else {
                 app.scroll_down();
             }
@@ -237,23 +241,17 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>)
         KeyCode::Char('k') | KeyCode::Up => {
             if on_tree_tab {
                 app.tree_up();
-            } else if on_agent_tab {
-                app.chat_scroll_up();
             } else {
                 app.scroll_up();
             }
         }
         KeyCode::Char('g') => {
-            if on_agent_tab {
-                app.chat_scroll_to_top();
-            } else if !on_tree_tab {
+            if !on_tree_tab {
                 app.scroll_to_top();
             }
         }
         KeyCode::Char('G') => {
-            if on_agent_tab {
-                app.chat_scroll_to_bottom();
-            } else if !on_tree_tab {
+            if !on_tree_tab {
                 app.scroll_to_bottom();
             }
         }
@@ -682,7 +680,6 @@ async fn handle_agent_chat_mode(
                 
                 // Add user message
                 app.session.chat_messages.push(crate::chat::ChatMessage::user(&text));
-                app.session.chat_scroll = 0; // Auto-scroll to bottom
                 
                 // Send to daemon (daemon manages session/conversation internally)
                 if let Some(client) = ws {
@@ -697,7 +694,6 @@ async fn handle_agent_chat_mode(
                     app.session.pending_response = true;
                     app.session.chat_streaming = Some(crate::chat::StreamingState::default());
                 }
-                
                 // Stay in AgentChat mode for follow-up messages
             }
         }

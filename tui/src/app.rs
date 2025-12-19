@@ -10,7 +10,7 @@ use crate::ws::protocol::{AgentResponse, AgentStatus, CommandResponse, Monitorin
 // Re-export types for backward compatibility with existing code
 pub use crate::session::SessionState;
 pub use crate::types::{
-    AppStatus, ConfirmAction, ContentTab, ContextInfo, InputPromptKind,
+    Action, AppStatus, Capability, ConfirmAction, ContentTab, ContextInfo, InputPromptKind,
     InteractionAction, InteractionTree, LogEntry, LogLevel, LogViewMode, LogViewState, Mode,
     Toast, ToastLevel, TreeNode, WsState,
 };
@@ -311,9 +311,18 @@ impl App {
                         .and_then(|u| u.as_str())
                         .unwrap_or("")
                         .to_string();
-                    self.app_status = AppStatus::Running { pid, uri };
-                    // Auto-fetch tree when app starts
-                    if self.session.tree.is_none() {
+                    
+                    // Check if VM was connected and now disconnected (uri became empty)
+                    let was_connected = matches!(&self.app_status, AppStatus::Running { uri, .. } if !uri.is_empty());
+                    let now_disconnected = uri.is_empty();
+                    
+                    self.app_status = AppStatus::Running { pid, uri: uri.clone() };
+                    
+                    if was_connected && now_disconnected {
+                        // VM disconnected (e.g., hot restart) - clear tree
+                        self.session.tree = None;
+                    } else if !uri.is_empty() && self.session.tree.is_none() {
+                        // VM connected and no tree - fetch it
                         self.needs_tree_fetch = true;
                     }
                 }
@@ -467,13 +476,51 @@ impl App {
                     .and_then(|c| c.as_array())
                     .map(|arr| Self::parse_tree_nodes(arr))
                     .unwrap_or_default();
+                let contexts = t
+                    .get("contexts")
+                    .and_then(|c| c.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|ctx| {
+                                let name = ctx.get("name")?.as_str()?.to_string();
+                                let description = ctx.get("description").and_then(|d| d.as_str()).map(String::from);
+                                Some(ContextInfo { name, description })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let capabilities = t
+                    .get("capabilities")
+                    .and_then(|c| c.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|cap| {
+                                let name = cap.get("name")?.as_str()?.to_string();
+                                Some(Capability { name })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let actions = t
+                    .get("actions")
+                    .and_then(|a| a.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|act| {
+                                let name = act.get("name")?.as_str()?.to_string();
+                                let description = act.get("description").and_then(|d| d.as_str()).map(String::from);
+                                Some(Action { name, description })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 Some(TreeNode {
                     id,
                     widget_type,
                     children,
-                    contexts: Vec::new(),
-                    capabilities: Vec::new(),
-                    actions: Vec::new(),
+                    contexts,
+                    capabilities,
+                    actions,
                 })
             })
             .collect()

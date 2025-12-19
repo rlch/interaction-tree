@@ -68,6 +68,14 @@ pub fn build_status_spans(app: &App) -> (Vec<Span<'static>>, usize) {
                         Style::default().fg(t.success),
                     ));
                 }
+                // Show if VM is disconnected (no vmServiceUri)
+                if session.vm_service_uri.as_ref().is_none_or(|u| u.is_empty()) {
+                    spans.push(sep.clone());
+                    spans.push(Span::styled(
+                        "vm disconnected",
+                        Style::default().fg(t.warning).add_modifier(Modifier::ITALIC),
+                    ));
+                }
             }
             "starting" => {
                 spans.push(sep.clone());
