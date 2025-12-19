@@ -25,7 +25,7 @@ export interface AgentExecutorConfig {
     resume?: string;
 }
 export interface AgentExecutionResult {
-    status: 'success' | 'failed' | 'needs_context';
+    status: 'success' | 'error' | 'needs_context';
     summary?: string;
     error?: string;
     question?: string;
@@ -36,8 +36,9 @@ export interface AgentExecutionResult {
 export type AgentStreamCallback = (event: Omit<AgentStreamEvent, 'type' | 'id' | 'sessionId'>) => void;
 /**
  * Execute an agent with the interaction tree tools bound to a specific VMClient.
+ * VMClient is optional - the agent can still respond but app-specific tools will fail gracefully.
  */
-export declare function executeAgent(systemPrompt: string, userMessage: string, config: AgentExecutorConfig, vmClient: VMServiceClient, onEvent?: AgentStreamCallback): Promise<AgentExecutionResult>;
+export declare function executeAgent(systemPrompt: string, userMessage: string, config: AgentExecutorConfig, vmClient?: VMServiceClient, onEvent?: AgentStreamCallback): Promise<AgentExecutionResult>;
 /**
  * Get the default agent config.
  */

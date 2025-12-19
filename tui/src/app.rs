@@ -1067,12 +1067,14 @@ impl App {
                 self.session.last_agent_error = None;
             }
             AgentStatus::Error => {
-                
                 self.session.agent_question = None;
-                if let Some(ref err) = resp.summary {
+                let error_msg = resp.error.or(resp.summary);
+                if let Some(ref err) = error_msg {
                     self.push_toast(Toast::error(err));
+                    self.session.chat_messages.push(crate::chat::ChatMessage::assistant(format!("Error: {}", err)));
                 }
-                self.session.last_agent_error = resp.summary;
+                self.session.last_agent_error = error_msg;
+                self.session.chat_streaming = None;
             }
         }
     }

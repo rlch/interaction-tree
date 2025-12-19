@@ -310,20 +310,28 @@ export class DaemonServer {
                     break;
                 }
                 case 'agent_message': {
+                    console.error(`[daemon] Received agent_message from ${clientId}`);
                     const clientEntry = this.clients.get(clientId);
                     const sessionId = clientEntry?.client.currentSessionId;
+                    console.error(`[daemon] sessionId: ${sessionId}`);
                     if (!sessionId) {
+                        console.error(`[daemon] No session connected`);
                         sendResponse({ success: false, error: NO_SESSION_ERROR });
                         return;
                     }
                     const session = this.sessionManager.get(sessionId);
+                    console.error(`[daemon] session: ${session?.id}, agent: ${!!session?.agent}`);
                     if (!session?.agent) {
+                        console.error(`[daemon] No agent for session`);
                         sendResponse({ success: false, error: 'No agent for session' });
                         return;
                     }
                     const { intent } = data;
+                    console.error(`[daemon] intent: ${intent}`);
                     const vmClient = this.vmClients.get(sessionId);
+                    console.error(`[daemon] vmClient: ${!!vmClient}`);
                     const onEvent = (partialEvent) => {
+                        console.error(`[daemon] onEvent: ${JSON.stringify(partialEvent.event)}`);
                         const streamEvent = {
                             type: 'agent_stream',
                             id,
@@ -335,6 +343,7 @@ export class DaemonServer {
                         }
                     };
                     try {
+                        console.error(`[daemon] Calling agent.execute...`);
                         // AgentExecutor maintains its own Claude SDK session ID internally
                         const result = await session.agent.execute({
                             intent,
@@ -343,7 +352,8 @@ export class DaemonServer {
                             cwd: session.projectPath,
                             onEvent,
                         });
-                        ws.send(JSON.stringify({
+                        console.error(`[daemon] agent.execute result: ${JSON.stringify(result)}`);
+                        const response = {
                             type: 'agent_response',
                             id,
                             status: result.status,
@@ -351,13 +361,15 @@ export class DaemonServer {
                             error: result.error,
                             question: result.question,
                             sdkSessionId: result.sessionId,
-                        }));
+                        };
+                        console.error(`[daemon] Sending response: ${JSON.stringify(response)}`);
+                        ws.send(JSON.stringify(response));
                     }
                     catch (err) {
                         ws.send(JSON.stringify({
                             type: 'agent_response',
                             id,
-                            status: 'failed',
+                            status: 'error',
                             error: err instanceof Error ? err.message : String(err),
                         }));
                     }

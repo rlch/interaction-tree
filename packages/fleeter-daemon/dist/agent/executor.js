@@ -25,10 +25,16 @@ function parseAskContext(content) {
 }
 /**
  * Create the interaction tree MCP server for the agent.
- * Takes VMClient as parameter so it's bound to a specific session.
+ * Takes VMClient as optional parameter - tools will return helpful errors if not connected.
  */
 function createInteractionTreeMcpServer(vmClient) {
+    const notConnectedError = {
+        content: [{ type: 'text', text: 'Error: No Flutter app connected. Start an app first with run_app or wait for it to connect.' }],
+    };
     const getStatusTool = tool('getStatus', 'Get the current connection status.', {}, async () => {
+        if (!vmClient) {
+            return { content: [{ type: 'text', text: JSON.stringify({ connected: false, message: 'No Flutter app connected' }, null, 2) }] };
+        }
         const status = await vmClient.getStatus();
         return {
             content: [{ type: 'text', text: JSON.stringify(status, null, 2) }],
@@ -38,10 +44,8 @@ function createInteractionTreeMcpServer(vmClient) {
         includeBounds: z.boolean().optional(),
         includeState: z.boolean().optional(),
     }, async (args) => {
-        if (!vmClient.isConnected) {
-            return {
-                content: [{ type: 'text', text: 'Error: Not connected to Flutter app.' }],
-            };
+        if (!vmClient || !vmClient.isConnected) {
+            return notConnectedError;
         }
         try {
             const tree = await vmClient.getTree({
@@ -64,10 +68,8 @@ function createInteractionTreeMcpServer(vmClient) {
         interaction: z.string(),
         args: z.record(z.unknown()).optional(),
     }, async (args) => {
-        if (!vmClient.isConnected) {
-            return {
-                content: [{ type: 'text', text: 'Error: Not connected to Flutter app.' }],
-            };
+        if (!vmClient || !vmClient.isConnected) {
+            return notConnectedError;
         }
         try {
             const result = await vmClient.execute(args.id, args.interaction, args.args);
@@ -82,10 +84,8 @@ function createInteractionTreeMcpServer(vmClient) {
         }
     });
     const getStateTool = tool('getState', 'Get the current state of a widget.', { id: z.string() }, async (args) => {
-        if (!vmClient.isConnected) {
-            return {
-                content: [{ type: 'text', text: 'Error: Not connected to Flutter app.' }],
-            };
+        if (!vmClient || !vmClient.isConnected) {
+            return notConnectedError;
         }
         try {
             const state = await vmClient.getState(args.id);
@@ -113,10 +113,8 @@ function createInteractionTreeMcpServer(vmClient) {
             timeoutMs: z.number().optional(),
         })),
     }, async (args) => {
-        if (!vmClient.isConnected) {
-            return {
-                content: [{ type: 'text', text: 'Error: Not connected to Flutter app.' }],
-            };
+        if (!vmClient || !vmClient.isConnected) {
+            return notConnectedError;
         }
         try {
             const result = await vmClient.batch(args.steps);
@@ -131,10 +129,8 @@ function createInteractionTreeMcpServer(vmClient) {
         }
     });
     const hotReloadTool = tool('hotReload', 'Hot reload the app to apply code changes.', {}, async () => {
-        if (!vmClient.isConnected) {
-            return {
-                content: [{ type: 'text', text: 'Error: Not connected to Flutter app.' }],
-            };
+        if (!vmClient || !vmClient.isConnected) {
+            return notConnectedError;
         }
         try {
             const result = await vmClient.hotReload();
@@ -149,10 +145,8 @@ function createInteractionTreeMcpServer(vmClient) {
         }
     });
     const hotRestartTool = tool('hotRestart', 'Hot restart the app (full restart, loses state).', {}, async () => {
-        if (!vmClient.isConnected) {
-            return {
-                content: [{ type: 'text', text: 'Error: Not connected to Flutter app.' }],
-            };
+        if (!vmClient || !vmClient.isConnected) {
+            return notConnectedError;
         }
         try {
             const result = await vmClient.hotRestart();
@@ -167,10 +161,8 @@ function createInteractionTreeMcpServer(vmClient) {
         }
     });
     const getLogsTool = tool('getLogs', 'Get recent logs from the Flutter app.', { since: z.string().optional() }, async (args) => {
-        if (!vmClient.isConnected) {
-            return {
-                content: [{ type: 'text', text: 'Error: Not connected to Flutter app.' }],
-            };
+        if (!vmClient || !vmClient.isConnected) {
+            return notConnectedError;
         }
         try {
             const logs = await vmClient.getLogs(args.since);
@@ -185,10 +177,8 @@ function createInteractionTreeMcpServer(vmClient) {
         }
     });
     const getErrorsTool = tool('getErrors', 'Get runtime errors from the app.', {}, async () => {
-        if (!vmClient.isConnected) {
-            return {
-                content: [{ type: 'text', text: 'Error: Not connected to Flutter app.' }],
-            };
+        if (!vmClient || !vmClient.isConnected) {
+            return notConnectedError;
         }
         try {
             const errors = await vmClient.getRuntimeErrors();
@@ -220,6 +210,7 @@ function createInteractionTreeMcpServer(vmClient) {
 }
 /**
  * Execute an agent with the interaction tree tools bound to a specific VMClient.
+ * VMClient is optional - the agent can still respond but app-specific tools will fail gracefully.
  */
 export async function executeAgent(systemPrompt, userMessage, config, vmClient, onEvent) {
     const mcpServer = createInteractionTreeMcpServer(vmClient);
@@ -284,7 +275,7 @@ export async function executeAgent(systemPrompt, userMessage, config, vmClient, 
                     const errorMsg = 'errors' in message ? message.errors.join(', ') : 'Unknown error';
                     onEvent?.({ event: { kind: 'error', message: errorMsg } });
                     return {
-                        status: 'failed',
+                        status: 'error',
                         error: errorMsg,
                         sessionId,
                     };
@@ -313,7 +304,7 @@ export async function executeAgent(systemPrompt, userMessage, config, vmClient, 
         const errorMsg = err instanceof Error ? err.message : String(err);
         onEvent?.({ event: { kind: 'error', message: errorMsg } });
         return {
-            status: 'failed',
+            status: 'error',
             error: errorMsg,
         };
     }
@@ -349,18 +340,13 @@ export class AgentExecutor {
     }
     async execute(options) {
         const { intent, vmClient, cwd, onEvent } = options;
-        if (!vmClient) {
-            return {
-                status: 'failed',
-                error: 'No VM client available for this session',
-            };
-        }
         const { AGENT_SYSTEM_PROMPT } = await import('./prompts.js');
         const config = getDefaultAgentConfig(cwd, this.config);
         // Resume existing session if we have one
         if (this.sdkSessionId) {
             config.resume = this.sdkSessionId;
         }
+        // vmClient may be undefined - the MCP tools handle this gracefully
         const result = await executeAgent(AGENT_SYSTEM_PROMPT, intent, config, vmClient, onEvent);
         // Store the session ID for future resumption
         if (result.sessionId) {

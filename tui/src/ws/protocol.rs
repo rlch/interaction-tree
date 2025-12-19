@@ -88,14 +88,6 @@ pub enum OutgoingMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         data: Option<serde_json::Value>,
     },
-    AgentMessage {
-        id: String,
-        #[serde(rename = "clientId")]
-        client_id: String,
-        intent: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        answer: Option<String>,
-    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,6 +148,8 @@ pub struct AgentResponse {
     pub status: AgentStatus,
     #[serde(default)]
     pub summary: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
     #[serde(default)]
     pub question: Option<String>,
     /// Claude SDK session ID (managed by daemon, not used by TUI)
