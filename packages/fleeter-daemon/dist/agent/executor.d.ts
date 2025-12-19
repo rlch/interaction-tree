@@ -21,6 +21,8 @@ export interface AgentExecutorConfig {
     cwd: string;
     /** Model to use (optional, defaults to SDK default) */
     model?: string;
+    /** Resume an existing Claude SDK session */
+    resume?: string;
 }
 export interface AgentExecutionResult {
     status: 'success' | 'failed' | 'needs_context';
@@ -28,7 +30,8 @@ export interface AgentExecutionResult {
     error?: string;
     question?: string;
     suggestions?: string[];
-    conversationId?: string;
+    /** The Claude SDK session ID to use for resumption */
+    sessionId?: string;
 }
 export type AgentStreamCallback = (event: Omit<AgentStreamEvent, 'type' | 'id' | 'sessionId'>) => void;
 /**
@@ -41,13 +44,19 @@ export declare function executeAgent(systemPrompt: string, userMessage: string, 
 export declare function getDefaultAgentConfig(cwd: string, overrides?: Partial<AgentConfig>): AgentExecutorConfig;
 /**
  * AgentExecutor class that wraps agent execution for a session.
+ * Maintains a single Claude SDK session per fleeter session for conversation continuity.
  */
 export declare class AgentExecutor {
     private config;
+    /** Claude SDK session ID for resuming conversations */
+    private sdkSessionId?;
     constructor(config?: Partial<AgentConfig>);
+    /** Get the current Claude SDK session ID */
+    getSessionId(): string | undefined;
+    /** Clear the session (start fresh conversation) */
+    clearSession(): void;
     execute(options: {
         intent: string;
-        conversationId?: string;
         vmClient?: VMServiceClient;
         sessionId: string;
         cwd: string;

@@ -121,6 +121,10 @@ export class VMServiceClient extends EventEmitter {
   private receivedNavigationEvent = false;
   private receivedReloadEvent = false;
   private errorLog = new ErrorLog();
+  
+  // Discovered Flutter services (registered by flutter_tools)
+  private hotRestartMethod: string | null = null;
+  private hotReloadMethod: string | null = null;
 
   get isConnected(): boolean {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
@@ -191,6 +195,7 @@ export class VMServiceClient extends EventEmitter {
       { id: 'Extension', desc: 'Extension events (Flutter.Frame, Flutter.Navigation, Flutter.Error)' },
       { id: 'Isolate', desc: 'Isolate events (reload, restart)' },
       { id: 'Stderr', desc: 'Stderr output for error collection' },
+      { id: 'Service', desc: 'Service registration events (hotRestart, hotReload)' },
     ];
     
     for (const stream of streams) {
@@ -366,16 +371,24 @@ export class VMServiceClient extends EventEmitter {
     }
     
     try {
-      // hotRestart is a service method, not an extension (called without isolateId prefix)
-      const result = await this.callMethod('hotRestart', {
-        isolateId: this.isolateId,
-      }) as { type?: string };
+      // hotRestart is a registered service (by flutter_tools), not a built-in VM method.
+      // The service name may be namespaced (e.g., 's0.hotRestart').
+      // We discover the actual method name by listening to Service stream events.
+      const methodName = this.hotRestartMethod ?? 'hotRestart';
+      log.vm.debug({ methodName }, 'Calling hot restart');
       
-      const success = result.type === 'Success' || result.type === undefined;
+      const result = await this.callMethod(methodName, {}) as { 
+        type?: string; 
+        result?: { type?: string };
+      };
+      
+      // Response may be nested in result.result
+      const resultType = result.result?.type ?? result.type;
+      const success = resultType === 'Success' || resultType === undefined;
       return { 
         success, 
         restartedAt: new Date().toISOString(),
-        error: success ? undefined : 'Restart returned non-success type',
+        error: success ? undefined : `Restart returned type: ${resultType}`,
       };
     } catch (err) {
       return {
@@ -607,6 +620,27 @@ export class VMServiceClient extends EventEmitter {
         this.receivedReloadEvent = true;
         this.emit('reload');
         this.emit('treeChanged');
+      }
+    }
+    
+    // Service registration events (discover hotRestart/hotReload methods)
+    if (streamId === 'Service') {
+      const serviceEvent = event as { 
+        kind?: string; 
+        service?: string; 
+        method?: string;
+      };
+      
+      if (serviceEvent.kind === 'ServiceRegistered' && serviceEvent.service && serviceEvent.method) {
+        log.vm.debug({ service: serviceEvent.service, method: serviceEvent.method }, 'Service registered');
+        
+        if (serviceEvent.service === 'hotRestart') {
+          this.hotRestartMethod = serviceEvent.method;
+          log.vm.info({ method: serviceEvent.method }, 'Discovered hotRestart service');
+        } else if (serviceEvent.service === 'hotReload') {
+          this.hotReloadMethod = serviceEvent.method;
+          log.vm.info({ method: serviceEvent.method }, 'Discovered hotReload service');
+        }
       }
     }
   }

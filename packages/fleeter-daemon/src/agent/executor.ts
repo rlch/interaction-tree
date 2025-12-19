@@ -32,6 +32,8 @@ export interface AgentExecutorConfig {
   cwd: string;
   /** Model to use (optional, defaults to SDK default) */
   model?: string;
+  /** Resume an existing Claude SDK session */
+  resume?: string;
 }
 
 export interface AgentExecutionResult {
@@ -40,7 +42,8 @@ export interface AgentExecutionResult {
   error?: string;
   question?: string;
   suggestions?: string[];
-  conversationId?: string;
+  /** The Claude SDK session ID to use for resumption */
+  sessionId?: string;
 }
 
 /**
@@ -336,10 +339,20 @@ export async function executeAgent(
     options.model = config.model;
   }
 
+  if (config.resume) {
+    options.resume = config.resume;
+  }
+
   try {
     const textBlocks: string[] = [];
+    let sessionId: string | undefined;
 
     for await (const message of query({ prompt: userMessage, options })) {
+      // Capture session ID from the init message
+      if (message.type === 'system' && message.subtype === 'init') {
+        sessionId = message.session_id;
+      }
+
       if (message.type === 'assistant') {
         for (const block of message.message.content) {
           if (block.type === 'text') {
@@ -370,6 +383,7 @@ export async function executeAgent(
           return {
             status: 'failed',
             error: errorMsg,
+            sessionId,
           };
         }
       }
@@ -384,6 +398,7 @@ export async function executeAgent(
         status: 'needs_context',
         question: askContext.question,
         suggestions: askContext.suggestions,
+        sessionId,
       };
     }
 
@@ -392,6 +407,7 @@ export async function executeAgent(
     return {
       status: 'success',
       summary: finalContent,
+      sessionId,
     };
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
@@ -419,17 +435,29 @@ export function getDefaultAgentConfig(
 
 /**
  * AgentExecutor class that wraps agent execution for a session.
+ * Maintains a single Claude SDK session per fleeter session for conversation continuity.
  */
 export class AgentExecutor {
   private config: Partial<AgentConfig>;
+  /** Claude SDK session ID for resuming conversations */
+  private sdkSessionId?: string;
 
   constructor(config?: Partial<AgentConfig>) {
     this.config = config ?? {};
   }
 
+  /** Get the current Claude SDK session ID */
+  getSessionId(): string | undefined {
+    return this.sdkSessionId;
+  }
+
+  /** Clear the session (start fresh conversation) */
+  clearSession(): void {
+    this.sdkSessionId = undefined;
+  }
+
   async execute(options: {
     intent: string;
-    conversationId?: string;
     vmClient?: VMServiceClient;
     sessionId: string;
     cwd: string;
@@ -447,6 +475,18 @@ export class AgentExecutor {
     const { AGENT_SYSTEM_PROMPT } = await import('./prompts.js');
     const config = getDefaultAgentConfig(cwd, this.config);
 
-    return executeAgent(AGENT_SYSTEM_PROMPT, intent, config, vmClient, onEvent);
+    // Resume existing session if we have one
+    if (this.sdkSessionId) {
+      config.resume = this.sdkSessionId;
+    }
+
+    const result = await executeAgent(AGENT_SYSTEM_PROMPT, intent, config, vmClient, onEvent);
+
+    // Store the session ID for future resumption
+    if (result.sessionId) {
+      this.sdkSessionId = result.sessionId;
+    }
+
+    return result;
   }
 }

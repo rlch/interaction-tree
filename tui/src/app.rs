@@ -36,7 +36,7 @@ pub struct SessionState {
     pub interaction_logs: VecDeque<LogEntry>,
     pub tree: Option<InteractionTree>,
     pub tree_state: TreeState<String>,
-    pub conversation_id: Option<String>,
+    
     pub agent_question: Option<String>,
     pub pending_response: bool,
     pub pending_intent: Option<String>,
@@ -59,7 +59,7 @@ impl SessionState {
             interaction_logs: VecDeque::with_capacity(max_events),
             tree: None,
             tree_state: TreeState::default(),
-            conversation_id: None,
+            
             agent_question: None,
             pending_response: false,
             pending_intent: None,
@@ -77,7 +77,7 @@ impl SessionState {
         self.interaction_logs = VecDeque::with_capacity(max_events);
         self.tree = None;
         self.tree_state = TreeState::default();
-        self.conversation_id = None;
+        
         self.agent_question = None;
         self.pending_response = false;
         self.pending_intent = None;
@@ -917,17 +917,17 @@ impl App {
 
         match resp.status {
             AgentStatus::Success => {
-                self.session.conversation_id = None;
+                
                 self.session.agent_question = None;
                 self.session.last_agent_error = None;
             }
             AgentStatus::NeedsContext => {
-                self.session.conversation_id = resp.conversation_id;
+                // Daemon manages session internally
                 self.session.agent_question = resp.question;
                 self.session.last_agent_error = None;
             }
             AgentStatus::Error => {
-                self.session.conversation_id = None;
+                
                 self.session.agent_question = None;
                 if let Some(ref err) = resp.summary {
                     self.push_toast(Toast::error(err));
@@ -982,7 +982,7 @@ impl App {
                     }
                 }
                 self.session.pending_response = false;
-                self.session.conversation_id = None;
+                
             }
             AgentEventKind::Error { message } => {
                 self.session.chat_streaming = None;
@@ -994,7 +994,7 @@ impl App {
     }
 
     pub fn in_answer_mode(&self) -> bool {
-        self.session.conversation_id.is_some()
+        self.session.agent_question.is_some()
     }
 
     pub fn is_app_running(&self) -> bool {
@@ -1008,7 +1008,7 @@ impl App {
     }
 
     pub fn cancel_answer_mode(&mut self) {
-        self.session.conversation_id = None;
+        
         self.session.agent_question = None;
     }
 
@@ -1300,18 +1300,15 @@ mod tests {
             status: AgentStatus::NeedsContext,
             summary: None,
             question: Some("Which button?".to_string()),
-            conversation_id: Some("conv-123".to_string()),
         };
 
         app.handle_agent_response(resp);
         assert!(!app.session.pending_response);
-        assert_eq!(app.session.conversation_id, Some("conv-123".to_string()));
     }
 
     #[test]
     fn test_handle_agent_response_success_clears_conversation() {
         let mut app = App::new("ws://localhost:9000".to_string(), 10, test_project());
-        app.session.conversation_id = Some("conv-123".to_string());
         app.session.pending_response = true;
 
         let resp = AgentResponse {
@@ -1319,12 +1316,11 @@ mod tests {
             status: AgentStatus::Success,
             summary: Some("Done".to_string()),
             question: None,
-            conversation_id: None,
+            
         };
 
         app.handle_agent_response(resp);
         assert!(!app.session.pending_response);
-        assert!(app.session.conversation_id.is_none());
     }
 
     #[test]
@@ -1337,7 +1333,7 @@ mod tests {
             status: AgentStatus::Success,
             summary: Some("Task completed".to_string()),
             question: None,
-            conversation_id: None,
+            
         };
 
         app.handle_agent_response(resp);
@@ -1357,12 +1353,11 @@ mod tests {
             status: AgentStatus::Error,
             summary: Some("Something went wrong".to_string()),
             question: None,
-            conversation_id: None,
+            
         };
 
         app.handle_agent_response(resp);
         assert_eq!(app.session.last_agent_error, Some("Something went wrong".to_string()));
-        assert!(app.session.conversation_id.is_none());
     }
 
     #[test]
@@ -1767,7 +1762,6 @@ mod tests {
             event_type: "test".to_string(),
             payload: serde_json::Value::Null,
         });
-        app.session.conversation_id = Some("conv-123".to_string());
         app.session.pending_response = true;
         app.filter = Some("filter".to_string());
         app.scroll_offset = 10;
@@ -1780,7 +1774,6 @@ mod tests {
         assert!(app.session.agent_events.is_empty());
         assert!(app.session.interaction_logs.is_empty());
         assert!(app.session.tree.is_none());
-        assert!(app.session.conversation_id.is_none());
         assert!(!app.session.pending_response);
         assert!(app.filter.is_none());
         assert_eq!(app.scroll_offset, 0);

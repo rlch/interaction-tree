@@ -56,7 +56,8 @@ export interface AgentResponse {
     summary?: string;
     error?: string;
     question?: string;
-    conversationId?: string;
+    /** Claude SDK session ID for resumption (managed internally by daemon) */
+    sdkSessionId?: string;
 }
 export interface MonitoringEvent {
     type: 'event';

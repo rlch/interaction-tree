@@ -568,49 +568,54 @@ async fn handle_action_menu_mode(
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') => {
             app.action_menu_items.clear();
+            app.action_menu_index = 0;
             app.action_menu_node_id = None;
             app.mode = Mode::Normal;
         }
         KeyCode::Char('j') | KeyCode::Down => {
-            app.action_menu_down();
+            if !app.action_menu_items.is_empty() {
+                app.action_menu_index = (app.action_menu_index + 1) % app.action_menu_items.len();
+            }
         }
         KeyCode::Char('k') | KeyCode::Up => {
-            app.action_menu_up();
+            if !app.action_menu_items.is_empty() {
+                app.action_menu_index = app.action_menu_index.checked_sub(1)
+                    .unwrap_or(app.action_menu_items.len() - 1);
+            }
         }
         KeyCode::Enter => {
-            // Execute selected action
-            if let (Some(node_id), Some(action)) = (
-                app.action_menu_node_id.clone(),
-                app.selected_action().cloned(),
-            ) {
-                match action {
-                    InteractionAction::Tap => {
-                        execute_interaction(app, ws, &node_id, "tap", None).await?;
-                    }
-                    InteractionAction::LongPress => {
-                        execute_interaction(app, ws, &node_id, "longPress", None).await?;
-                    }
-                    InteractionAction::DoubleTap => {
-                        execute_interaction(app, ws, &node_id, "doubleTap", None).await?;
-                    }
-                    InteractionAction::Scroll { dx, dy } => {
-                        execute_interaction(
-                            app,
-                            ws,
-                            &node_id,
-                            "scroll",
-                            Some(serde_json::json!({ "dx": dx, "dy": dy })),
-                        )
-                        .await?;
-                    }
-                    InteractionAction::EnterText(_) => {
-                        app.push_toast(crate::app::Toast::info("Enter text not implemented yet"));
-                    }
-                    InteractionAction::Custom(action_name) => {
-                        execute_interaction(app, ws, &node_id, &action_name, None).await?;
+            if let Some((_, action)) = app.action_menu_items.get(app.action_menu_index).cloned() {
+                if let Some(node_id) = app.action_menu_node_id.clone() {
+                    match action {
+                        InteractionAction::Tap => {
+                            execute_interaction(app, ws, &node_id, "tap", None).await?;
+                        }
+                        InteractionAction::LongPress => {
+                            execute_interaction(app, ws, &node_id, "longPress", None).await?;
+                        }
+                        InteractionAction::DoubleTap => {
+                            execute_interaction(app, ws, &node_id, "doubleTap", None).await?;
+                        }
+                        InteractionAction::Scroll { dx, dy } => {
+                            execute_interaction(
+                                app,
+                                ws,
+                                &node_id,
+                                "scroll",
+                                Some(serde_json::json!({ "dx": dx, "dy": dy })),
+                            )
+                            .await?;
+                        }
+                        InteractionAction::EnterText(_) => {
+                            app.push_toast(crate::app::Toast::info("Enter text not implemented yet"));
+                        }
+                        InteractionAction::Custom(action_name) => {
+                            execute_interaction(app, ws, &action_name, &action_name, None).await?;
+                        }
                     }
                 }
                 app.action_menu_items.clear();
+                app.action_menu_index = 0;
                 app.action_menu_node_id = None;
                 app.mode = Mode::Normal;
             }
@@ -638,14 +643,13 @@ async fn handle_agent_chat_mode(
                 // Add user message
                 app.session.chat_messages.push(crate::chat::ChatMessage::user(&text));
                 
-                // Send to daemon
+                // Send to daemon (daemon manages session/conversation internally)
                 if let Some(client) = ws {
                     let msg = OutgoingMessage::AgentMessage {
                         id: Uuid::new_v4().to_string(),
                         client_id: client.client_id().to_string(),
                         intent: text,
                         answer: None,
-                        conversation_id: app.session.conversation_id.clone(),
                     };
                     let _ = client.send(msg).await;
                     app.session.pending_response = true;
@@ -872,7 +876,6 @@ async fn execute_command(app: &mut App, input: &str, ws: &Option<WsClient>) -> R
                     client_id: client.client_id().to_string(),
                     intent,
                     answer,
-                    conversation_id: app.session.conversation_id.clone(),
                 };
                 app.session.pending_response = true;
                 let _ = client.send(msg).await;

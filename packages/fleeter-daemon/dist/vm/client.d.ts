@@ -41,6 +41,8 @@ export declare class VMServiceClient extends EventEmitter {
     private receivedNavigationEvent;
     private receivedReloadEvent;
     private errorLog;
+    private hotRestartMethod;
+    private hotReloadMethod;
     get isConnected(): boolean;
     get connectionUri(): string | null;
     /**

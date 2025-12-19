@@ -247,9 +247,17 @@ export async function executeAgent(systemPrompt, userMessage, config, vmClient, 
     if (config.model) {
         options.model = config.model;
     }
+    if (config.resume) {
+        options.resume = config.resume;
+    }
     try {
         const textBlocks = [];
+        let sessionId;
         for await (const message of query({ prompt: userMessage, options })) {
+            // Capture session ID from the init message
+            if (message.type === 'system' && message.subtype === 'init') {
+                sessionId = message.session_id;
+            }
             if (message.type === 'assistant') {
                 for (const block of message.message.content) {
                     if (block.type === 'text') {
@@ -278,6 +286,7 @@ export async function executeAgent(systemPrompt, userMessage, config, vmClient, 
                     return {
                         status: 'failed',
                         error: errorMsg,
+                        sessionId,
                     };
                 }
             }
@@ -290,12 +299,14 @@ export async function executeAgent(systemPrompt, userMessage, config, vmClient, 
                 status: 'needs_context',
                 question: askContext.question,
                 suggestions: askContext.suggestions,
+                sessionId,
             };
         }
         onEvent?.({ event: { kind: 'task_complete', summary: finalContent } });
         return {
             status: 'success',
             summary: finalContent,
+            sessionId,
         };
     }
     catch (err) {
@@ -319,11 +330,22 @@ export function getDefaultAgentConfig(cwd, overrides) {
 }
 /**
  * AgentExecutor class that wraps agent execution for a session.
+ * Maintains a single Claude SDK session per fleeter session for conversation continuity.
  */
 export class AgentExecutor {
     config;
+    /** Claude SDK session ID for resuming conversations */
+    sdkSessionId;
     constructor(config) {
         this.config = config ?? {};
+    }
+    /** Get the current Claude SDK session ID */
+    getSessionId() {
+        return this.sdkSessionId;
+    }
+    /** Clear the session (start fresh conversation) */
+    clearSession() {
+        this.sdkSessionId = undefined;
     }
     async execute(options) {
         const { intent, vmClient, cwd, onEvent } = options;
@@ -335,7 +357,16 @@ export class AgentExecutor {
         }
         const { AGENT_SYSTEM_PROMPT } = await import('./prompts.js');
         const config = getDefaultAgentConfig(cwd, this.config);
-        return executeAgent(AGENT_SYSTEM_PROMPT, intent, config, vmClient, onEvent);
+        // Resume existing session if we have one
+        if (this.sdkSessionId) {
+            config.resume = this.sdkSessionId;
+        }
+        const result = await executeAgent(AGENT_SYSTEM_PROMPT, intent, config, vmClient, onEvent);
+        // Store the session ID for future resumption
+        if (result.sessionId) {
+            this.sdkSessionId = result.sessionId;
+        }
+        return result;
     }
 }
 //# sourceMappingURL=executor.js.map

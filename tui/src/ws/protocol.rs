@@ -95,8 +95,6 @@ pub enum OutgoingMessage {
         intent: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         answer: Option<String>,
-        #[serde(rename = "conversationId", skip_serializing_if = "Option::is_none")]
-        conversation_id: Option<String>,
     },
 }
 
@@ -160,8 +158,9 @@ pub struct AgentResponse {
     pub summary: Option<String>,
     #[serde(default)]
     pub question: Option<String>,
-    #[serde(rename = "conversationId", default)]
-    pub conversation_id: Option<String>,
+    /// Claude SDK session ID (managed by daemon, not used by TUI)
+    #[serde(rename = "sdkSessionId", default)]
+    pub sdk_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

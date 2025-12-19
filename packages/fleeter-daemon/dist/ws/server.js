@@ -321,7 +321,7 @@ export class DaemonServer {
                         sendResponse({ success: false, error: 'No agent for session' });
                         return;
                     }
-                    const { intent, conversationId } = data;
+                    const { intent } = data;
                     const vmClient = this.vmClients.get(sessionId);
                     const onEvent = (partialEvent) => {
                         const streamEvent = {
@@ -335,9 +335,9 @@ export class DaemonServer {
                         }
                     };
                     try {
+                        // AgentExecutor maintains its own Claude SDK session ID internally
                         const result = await session.agent.execute({
                             intent,
-                            conversationId,
                             vmClient,
                             sessionId,
                             cwd: session.projectPath,
@@ -350,7 +350,7 @@ export class DaemonServer {
                             summary: result.summary,
                             error: result.error,
                             question: result.question,
-                            conversationId: result.conversationId,
+                            sdkSessionId: result.sessionId,
                         }));
                     }
                     catch (err) {
