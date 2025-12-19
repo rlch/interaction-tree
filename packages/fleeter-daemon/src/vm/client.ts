@@ -27,6 +27,14 @@ import type {
   AppStatus,
 } from './types.js';
 
+/** Interaction event data emitted after execute() */
+export interface InteractionEvent {
+  id: string;
+  interaction: string;
+  args?: Record<string, unknown>;
+  result: InteractionResult;
+}
+
 /** Events emitted by VMServiceClient */
 export interface VMServiceEvents {
   /** Fired when tree may have changed (Frame, Navigation, Reload events) */
@@ -39,6 +47,8 @@ export interface VMServiceEvents {
   reload: () => void;
   /** Fired when connection closes */
   close: () => void;
+  /** Fired after an interaction is executed */
+  interaction: (event: InteractionEvent) => void;
 }
 
 /** Rate limiter for frame events (like DevTools at 5 FPS) */
@@ -198,11 +208,14 @@ export class VMServiceClient extends EventEmitter {
     interaction: string,
     args?: Record<string, unknown>
   ): Promise<InteractionResult> {
-    return (await this.callExtension('ext.interaction_tree.execute', {
+    const result = (await this.callExtension('ext.interaction_tree.execute', {
       id,
       interaction,
       args,
     })) as InteractionResult;
+    
+    this.emit('interaction', { id, interaction, args, result });
+    return result;
   }
 
   async tap(id: string): Promise<InteractionResult> {

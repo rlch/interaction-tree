@@ -145,11 +145,13 @@ export class VMServiceClient extends EventEmitter {
         return result.targets ?? [];
     }
     async execute(id, interaction, args) {
-        return (await this.callExtension('ext.interaction_tree.execute', {
+        const result = (await this.callExtension('ext.interaction_tree.execute', {
             id,
             interaction,
             args,
         }));
+        this.emit('interaction', { id, interaction, args, result });
+        return result;
     }
     async tap(id) {
         return this.execute(id, 'tap');

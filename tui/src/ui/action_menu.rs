@@ -2,11 +2,11 @@ use crate::app::App;
 use crate::theme::theme;
 use ratatui::{
     layout::{Constraint, Layout, Rect},
-    style::{Color, Style},
-    widgets::{Block, Borders, Clear},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState},
     Frame,
 };
-use tui_menu::Menu;
 
 pub fn render(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
@@ -18,27 +18,53 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     let t = theme();
 
-    // Center the menu
-    let menu_width = 30.min(area.width.saturating_sub(4));
-    let menu_height = 12.min(area.height.saturating_sub(4));
+    // Build menu items from action_menu state
+    let items: Vec<ListItem> = app
+        .action_menu_items
+        .iter()
+        .map(|(label, _)| ListItem::new(Line::from(vec![Span::raw(label.clone())])))
+        .collect();
+
+    if items.is_empty() {
+        return;
+    }
+
+    // Calculate width based on longest item + padding
+    let max_label_len = app
+        .action_menu_items
+        .iter()
+        .map(|(label, _)| label.len())
+        .max()
+        .unwrap_or(10);
+    let menu_width = (max_label_len as u16 + 4).min(area.width.saturating_sub(4));
+    let menu_height = (items.len() as u16 + 2).min(area.height.saturating_sub(4));
 
     let popup_area = centered_rect(menu_width, menu_height, area);
 
     // Clear the background
     frame.render_widget(Clear, popup_area);
 
-    // Draw menu background (use Reset to let terminal's background show through)
+    // Draw menu with border
     let block = Block::default()
         .title(" Actions ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(t.border))
-        .style(Style::default().bg(Color::Reset));
+        .style(Style::default().bg(Color::Black));
 
-    let inner = block.inner(popup_area);
-    frame.render_widget(block, popup_area);
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(
+            Style::default()
+                .bg(t.info)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▸ ");
 
-    // Render the menu
-    frame.render_stateful_widget(Menu::new(), inner, &mut app.action_menu);
+    let mut state = ListState::default();
+    state.select(Some(app.action_menu_index));
+
+    frame.render_stateful_widget(list, popup_area, &mut state);
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {

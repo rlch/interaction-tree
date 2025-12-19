@@ -221,7 +221,7 @@ function createInteractionTreeMcpServer(vmClient) {
 /**
  * Execute an agent with the interaction tree tools bound to a specific VMClient.
  */
-export async function executeAgent(systemPrompt, userMessage, config, vmClient) {
+export async function executeAgent(systemPrompt, userMessage, config, vmClient, onEvent) {
     const mcpServer = createInteractionTreeMcpServer(vmClient);
     const options = {
         cwd: config.cwd,
@@ -248,19 +248,33 @@ export async function executeAgent(systemPrompt, userMessage, config, vmClient) 
         options.model = config.model;
     }
     try {
-        // Accumulate all text content from assistant messages
         const textBlocks = [];
         for await (const message of query({ prompt: userMessage, options })) {
             if (message.type === 'assistant') {
                 for (const block of message.message.content) {
                     if (block.type === 'text') {
                         textBlocks.push(block.text);
+                        onEvent?.({ event: { kind: 'text_delta', text: block.text } });
+                    }
+                    else if (block.type === 'tool_use') {
+                        onEvent?.({ event: { kind: 'tool_call_start', toolName: block.name, toolCallId: block.id } });
+                    }
+                }
+            }
+            if (message.type === 'user') {
+                for (const block of message.message.content) {
+                    if (block.type === 'tool_result') {
+                        const resultText = Array.isArray(block.content)
+                            ? block.content.map((c) => c.type === 'text' ? c.text : '').join('')
+                            : typeof block.content === 'string' ? block.content : undefined;
+                        onEvent?.({ event: { kind: 'tool_call_end', toolName: '', toolCallId: block.tool_use_id, result: resultText } });
                     }
                 }
             }
             if (message.type === 'result') {
                 if (message.subtype !== 'success') {
                     const errorMsg = 'errors' in message ? message.errors.join(', ') : 'Unknown error';
+                    onEvent?.({ event: { kind: 'error', message: errorMsg } });
                     return {
                         status: 'failed',
                         error: errorMsg,
@@ -268,10 +282,8 @@ export async function executeAgent(systemPrompt, userMessage, config, vmClient) 
                 }
             }
         }
-        // Use the last non-empty text block as final content, but check all for ASK_CONTEXT
         const allContent = textBlocks.join('\n');
         const finalContent = textBlocks.filter(t => t.trim()).pop() ?? '';
-        // Check all content for ASK_CONTEXT pattern (might not be in last block)
         const askContext = parseAskContext(allContent);
         if (askContext.isAskContext) {
             return {
@@ -280,15 +292,18 @@ export async function executeAgent(systemPrompt, userMessage, config, vmClient) 
                 suggestions: askContext.suggestions,
             };
         }
+        onEvent?.({ event: { kind: 'task_complete', summary: finalContent } });
         return {
             status: 'success',
             summary: finalContent,
         };
     }
     catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        onEvent?.({ event: { kind: 'error', message: errorMsg } });
         return {
             status: 'failed',
-            error: err instanceof Error ? err.message : String(err),
+            error: errorMsg,
         };
     }
 }
@@ -311,7 +326,7 @@ export class AgentExecutor {
         this.config = config ?? {};
     }
     async execute(options) {
-        const { intent, vmClient, cwd } = options;
+        const { intent, vmClient, cwd, onEvent } = options;
         if (!vmClient) {
             return {
                 status: 'failed',
@@ -320,7 +335,7 @@ export class AgentExecutor {
         }
         const { AGENT_SYSTEM_PROMPT } = await import('./prompts.js');
         const config = getDefaultAgentConfig(cwd, this.config);
-        return executeAgent(AGENT_SYSTEM_PROMPT, intent, config, vmClient);
+        return executeAgent(AGENT_SYSTEM_PROMPT, intent, config, vmClient, onEvent);
     }
 }
 //# sourceMappingURL=executor.js.map

@@ -1,6 +1,5 @@
 use std::collections::VecDeque;
 
-use tui_menu::{MenuItem, MenuState};
 use tui_tree_widget::TreeState;
 
 use crate::flutter_log::FlutterLogEntry;
@@ -42,6 +41,14 @@ pub struct SessionState {
     pub pending_response: bool,
     pub pending_intent: Option<String>,
     pub last_agent_error: Option<String>,
+    /// Chat messages for the Agent pane
+    pub chat_messages: Vec<crate::chat::ChatMessage>,
+    /// Current streaming response from agent
+    pub chat_streaming: Option<crate::chat::StreamingState>,
+    /// Composer text input for agent chat
+    pub chat_input: String,
+    /// Cursor position in chat input
+    pub chat_cursor: usize,
 }
 
 impl SessionState {
@@ -57,6 +64,10 @@ impl SessionState {
             pending_response: false,
             pending_intent: None,
             last_agent_error: None,
+            chat_messages: Vec::new(),
+            chat_streaming: None,
+            chat_input: String::new(),
+            chat_cursor: 0,
         }
     }
 
@@ -71,6 +82,10 @@ impl SessionState {
         self.pending_response = false;
         self.pending_intent = None;
         self.last_agent_error = None;
+        self.chat_messages.clear();
+        self.chat_streaming = None;
+        self.chat_input.clear();
+        self.chat_cursor = 0;
     }
 }
 
@@ -121,6 +136,8 @@ pub enum Mode {
     InputPrompt(InputPromptKind),
     /// Action menu for tree node interactions
     ActionMenu,
+    /// Agent chat input mode (focused on Agent tab)
+    AgentChat,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -204,8 +221,10 @@ pub struct App {
     pub toasts: VecDeque<Toast>,
     pub toast_ttl_secs: u64,
 
-    /// Action menu state for tree interactions
-    pub action_menu: MenuState<InteractionAction>,
+    /// Action menu items (label, action)
+    pub action_menu_items: Vec<(String, InteractionAction)>,
+    /// Currently selected index in action menu
+    pub action_menu_index: usize,
     /// Currently selected node ID for action menu
     pub action_menu_node_id: Option<String>,
 
@@ -302,7 +321,8 @@ impl App {
             toasts: VecDeque::new(),
             toast_ttl_secs: 5,
 
-            action_menu: MenuState::new(vec![]),
+            action_menu_items: Vec::new(),
+            action_menu_index: 0,
             action_menu_node_id: None,
 
             should_quit: false,
@@ -319,42 +339,59 @@ impl App {
             return;
         }
 
-        let mut items: Vec<MenuItem<InteractionAction>> = Vec::new();
+        let mut items: Vec<(String, InteractionAction)> = Vec::new();
 
         // Capabilities as menu items
         if caps.contains(&"tap".to_string()) {
-            items.push(MenuItem::item("Tap", InteractionAction::Tap));
+            items.push(("Tap".to_string(), InteractionAction::Tap));
         }
         if caps.contains(&"longPress".to_string()) {
-            items.push(MenuItem::item("Long Press", InteractionAction::LongPress));
+            items.push(("Long Press".to_string(), InteractionAction::LongPress));
         }
         if caps.contains(&"doubleTap".to_string()) {
-            items.push(MenuItem::item("Double Tap", InteractionAction::DoubleTap));
+            items.push(("Double Tap".to_string(), InteractionAction::DoubleTap));
         }
         if caps.contains(&"scroll".to_string()) {
-            items.push(MenuItem::group(
-                "Scroll",
-                vec![
-                    MenuItem::item("Up", InteractionAction::Scroll { dx: 0.0, dy: -100.0 }),
-                    MenuItem::item("Down", InteractionAction::Scroll { dx: 0.0, dy: 100.0 }),
-                    MenuItem::item("Left", InteractionAction::Scroll { dx: -100.0, dy: 0.0 }),
-                    MenuItem::item("Right", InteractionAction::Scroll { dx: 100.0, dy: 0.0 }),
-                ],
-            ));
+            items.push(("Scroll Up".to_string(), InteractionAction::Scroll { dx: 0.0, dy: -100.0 }));
+            items.push(("Scroll Down".to_string(), InteractionAction::Scroll { dx: 0.0, dy: 100.0 }));
         }
         if caps.contains(&"enterText".to_string()) {
-            items.push(MenuItem::item("Enter Text...", InteractionAction::EnterText(String::new())));
+            items.push(("Enter Text...".to_string(), InteractionAction::EnterText(String::new())));
         }
 
         // Custom actions
         for action in actions {
-            items.push(MenuItem::item(action.clone(), InteractionAction::Custom(action)));
+            items.push((action.clone(), InteractionAction::Custom(action)));
         }
 
         if !items.is_empty() {
-            self.action_menu = MenuState::new(items);
+            self.action_menu_items = items;
+            self.action_menu_index = 0;
             self.action_menu_node_id = node_id;
             self.mode = Mode::ActionMenu;
+        }
+    }
+
+    /// Get currently selected action from menu
+    pub fn selected_action(&self) -> Option<&InteractionAction> {
+        self.action_menu_items.get(self.action_menu_index).map(|(_, a)| a)
+    }
+
+    /// Move action menu selection up
+    pub fn action_menu_up(&mut self) {
+        if !self.action_menu_items.is_empty() {
+            if self.action_menu_index > 0 {
+                self.action_menu_index -= 1;
+            } else {
+                self.action_menu_index = self.action_menu_items.len() - 1;
+            }
+        }
+    }
+
+    /// Move action menu selection down
+    pub fn action_menu_down(&mut self) {
+        if !self.action_menu_items.is_empty() {
+            self.action_menu_index = (self.action_menu_index + 1) % self.action_menu_items.len();
         }
     }
 
@@ -828,9 +865,14 @@ impl App {
                     .map(|arr| {
                         arr.iter()
                             .filter_map(|cap| {
+                                // Support both formats:
+                                // - Object: {"type": "tap"}
+                                // - String: "tap"
                                 cap.get("type")
                                     .and_then(|t| t.as_str())
-                                    .map(|s| Capability { capability_type: s.to_string() })
+                                    .map(|s| s.to_string())
+                                    .or_else(|| cap.as_str().map(|s| s.to_string()))
+                                    .map(|s| Capability { capability_type: s })
                             })
                             .collect()
                     })
@@ -891,6 +933,62 @@ impl App {
                     self.push_toast(Toast::error(err));
                 }
                 self.session.last_agent_error = resp.summary;
+            }
+        }
+    }
+
+    pub fn handle_agent_stream_event(&mut self, event: crate::ws::protocol::AgentStreamEvent) {
+        use crate::ws::protocol::AgentEventKind;
+        use crate::chat::{ChatMessage, ToolCall, ToolStatus, StreamingState};
+        
+        // Ensure we have streaming state
+        if self.session.chat_streaming.is_none() {
+            self.session.chat_streaming = Some(StreamingState::default());
+        }
+        
+        match event.event {
+            AgentEventKind::TextDelta { text } => {
+                if let Some(streaming) = &mut self.session.chat_streaming {
+                    streaming.text_buffer.push_str(&text);
+                }
+            }
+            AgentEventKind::ToolCallStart { tool_name, tool_call_id } => {
+                if let Some(streaming) = &mut self.session.chat_streaming {
+                    streaming.tool_calls.push(ToolCall {
+                        id: tool_call_id,
+                        name: tool_name,
+                        args: serde_json::Value::Null,
+                        status: ToolStatus::Running,
+                        output: None,
+                    });
+                }
+            }
+            AgentEventKind::ToolCallEnd { tool_call_id, result, .. } => {
+                if let Some(streaming) = &mut self.session.chat_streaming {
+                    if let Some(call) = streaming.tool_calls.iter_mut().find(|c| c.id == tool_call_id) {
+                        call.status = ToolStatus::Success;
+                        call.output = result;
+                    }
+                }
+            }
+            AgentEventKind::TaskComplete { summary: _ } => {
+                // Finalize streaming into messages
+                if let Some(streaming) = self.session.chat_streaming.take() {
+                    if !streaming.text_buffer.is_empty() {
+                        self.session.chat_messages.push(ChatMessage::assistant(streaming.text_buffer));
+                    }
+                    if !streaming.tool_calls.is_empty() {
+                        self.session.chat_messages.push(ChatMessage::assistant_tools(streaming.tool_calls));
+                    }
+                }
+                self.session.pending_response = false;
+                self.session.conversation_id = None;
+            }
+            AgentEventKind::Error { message } => {
+                self.session.chat_streaming = None;
+                self.session.pending_response = false;
+                self.session.chat_messages.push(ChatMessage::assistant(format!("Error: {}", message)));
+                self.push_toast(Toast::error(&message));
             }
         }
     }
@@ -1769,5 +1867,104 @@ mod tests {
         // Selected session should be unchanged
         let session1 = app.current_session().unwrap();
         assert_eq!(session1.app_status, "not_running");
+    }
+
+    #[test]
+    fn test_parse_tree_nodes_string_capabilities() {
+        // Daemon sends capabilities as array of strings: ["tap", "longPress"]
+        let json = serde_json::json!([
+            {
+                "id": "my-button",
+                "widgetType": "ElevatedButton",
+                "capabilities": ["tap", "longPress", "doubleTap"],
+                "actions": [],
+                "children": []
+            }
+        ]);
+
+        let nodes = App::parse_tree_nodes(json.as_array().unwrap());
+
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].id, "my-button");
+        assert_eq!(nodes[0].capabilities.len(), 3);
+        assert_eq!(nodes[0].capabilities[0].capability_type, "tap");
+        assert_eq!(nodes[0].capabilities[1].capability_type, "longPress");
+        assert_eq!(nodes[0].capabilities[2].capability_type, "doubleTap");
+    }
+
+    #[test]
+    fn test_parse_tree_nodes_object_capabilities() {
+        // Also support object format: [{type: "tap"}]
+        let json = serde_json::json!([
+            {
+                "id": "my-button",
+                "capabilities": [{"type": "tap"}, {"type": "scroll"}],
+                "children": []
+            }
+        ]);
+
+        let nodes = App::parse_tree_nodes(json.as_array().unwrap());
+
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].capabilities.len(), 2);
+        assert_eq!(nodes[0].capabilities[0].capability_type, "tap");
+        assert_eq!(nodes[0].capabilities[1].capability_type, "scroll");
+    }
+
+    #[test]
+    fn test_parse_tree_nodes_with_actions() {
+        let json = serde_json::json!([
+            {
+                "id": "item",
+                "capabilities": ["tap"],
+                "actions": [
+                    {"name": "delete", "description": "Delete this item"},
+                    {"name": "edit"}
+                ],
+                "children": []
+            }
+        ]);
+
+        let nodes = App::parse_tree_nodes(json.as_array().unwrap());
+
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].actions.len(), 2);
+        assert_eq!(nodes[0].actions[0].name, "delete");
+        assert_eq!(nodes[0].actions[0].description, Some("Delete this item".to_string()));
+        assert_eq!(nodes[0].actions[1].name, "edit");
+        assert_eq!(nodes[0].actions[1].description, None);
+    }
+
+    #[test]
+    fn test_parse_tree_nodes_nested_children() {
+        let json = serde_json::json!([
+            {
+                "id": "list",
+                "capabilities": ["scroll"],
+                "children": [
+                    {
+                        "id": "item-1",
+                        "capabilities": ["tap", "longPress"],
+                        "children": []
+                    },
+                    {
+                        "id": "item-2", 
+                        "capabilities": ["tap"],
+                        "children": []
+                    }
+                ]
+            }
+        ]);
+
+        let nodes = App::parse_tree_nodes(json.as_array().unwrap());
+
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].id, "list");
+        assert_eq!(nodes[0].capabilities.len(), 1);
+        assert_eq!(nodes[0].children.len(), 2);
+        assert_eq!(nodes[0].children[0].id, "item-1");
+        assert_eq!(nodes[0].children[0].capabilities.len(), 2);
+        assert_eq!(nodes[0].children[1].id, "item-2");
+        assert_eq!(nodes[0].children[1].capabilities.len(), 1);
     }
 }

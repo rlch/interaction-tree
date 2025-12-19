@@ -148,15 +148,8 @@ fn build_variant_item(
         if let Some(child_id) = variant.children[0].id() {
             spans.push(Span::raw(" → "));
             spans.push(Span::raw(child_id.to_string()));
-            // Add capabilities for the child
-            if let Some(schema) = schemas.get(child_id) {
-                if !schema.capabilities.is_empty() {
-                    spans.push(Span::styled(
-                        format!(" [{}]", schema.capabilities.join(", ")),
-                        Style::new().fg(Color::Green),
-                    ));
-                }
-            }
+            // Show indicator if child has interactions
+            add_schema_info(&mut spans, child_id, schemas);
         }
     }
 
@@ -213,17 +206,11 @@ fn format_id_label(id: &str, schemas: &BTreeMap<String, Schema>) -> Line<'static
 
 fn add_schema_info(spans: &mut Vec<Span<'static>>, id: &str, schemas: &BTreeMap<String, Schema>) {
     if let Some(schema) = schemas.get(id) {
-        if !schema.capabilities.is_empty() {
-            spans.push(Span::styled(
-                format!(" [{}]", schema.capabilities.join(", ")),
-                Style::new().fg(Color::Green),
-            ));
-        }
-        if !schema.actions.is_empty() {
-            spans.push(Span::styled(
-                format!(" {{{}}}", schema.actions.join(", ")),
-                Style::new().fg(Color::Magenta),
-            ));
+        // Show a simple indicator if node has interactions available
+        let has_caps = !schema.capabilities.is_empty();
+        let has_actions = !schema.actions.is_empty();
+        if has_caps || has_actions {
+            spans.push(Span::styled(" ●", Style::new().fg(Color::Green)));
         }
     }
 }

@@ -118,9 +118,12 @@ export class SessionManager extends EventEmitter {
      * Update session status.
      */
     updateStatus(sessionId, status, details) {
-        const session = this.sessions.get(sessionId);
-        if (!session)
+        const session = this.get(sessionId);
+        if (!session) {
+            console.error(`[session-manager] updateStatus: session not found for ${sessionId}`);
             return;
+        }
+        console.error(`[session-manager] updateStatus: ${session.name} -> ${status}`);
         session.appStatus = status;
         if (details?.vmServiceUri)
             session.vmServiceUri = details.vmServiceUri;
@@ -133,7 +136,7 @@ export class SessionManager extends EventEmitter {
      * Add a log line to a session. Logs persist across process restarts.
      */
     addLog(sessionId, line) {
-        const session = this.sessions.get(sessionId);
+        const session = this.get(sessionId);
         if (!session)
             return;
         session.logs.push(line);

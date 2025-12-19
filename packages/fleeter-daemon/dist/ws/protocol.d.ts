@@ -61,12 +61,37 @@ export interface AgentResponse {
 export interface MonitoringEvent {
     type: 'event';
     ts: string;
-    source: 'flutter' | 'vm' | 'agent' | 'daemon' | 'session' | 'tree';
+    source: 'flutter' | 'vm' | 'agent' | 'daemon' | 'session' | 'tree' | 'interaction';
     eventType: string;
     sessionId?: string;
     payload: unknown;
 }
-export type ServerMessage = ServerHello | CommandResponse | AgentResponse | MonitoringEvent;
+export type AgentEventType = {
+    kind: 'text_delta';
+    text: string;
+} | {
+    kind: 'tool_call_start';
+    toolName: string;
+    toolCallId: string;
+} | {
+    kind: 'tool_call_end';
+    toolName: string;
+    toolCallId: string;
+    result?: string;
+} | {
+    kind: 'task_complete';
+    summary: string;
+} | {
+    kind: 'error';
+    message: string;
+};
+export interface AgentStreamEvent {
+    type: 'agent_stream';
+    id: string;
+    sessionId: string;
+    event: AgentEventType;
+}
+export type ServerMessage = ServerHello | CommandResponse | AgentResponse | MonitoringEvent | AgentStreamEvent;
 export declare function isClientHello(msg: unknown): msg is ClientHello;
 export declare function isCommandMessage(msg: unknown): msg is CommandMessage;
 export declare function isAgentToolCall(msg: unknown): msg is AgentToolCall;

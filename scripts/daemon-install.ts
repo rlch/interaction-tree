@@ -22,12 +22,21 @@ async function main() {
     process.exit(1);
   }
 
+  // Build first to ensure we have latest code
+  const rootDir = dirname(import.meta.dir);
+  console.log('Building daemon...');
+  const buildResult = spawnSync('bun', ['run', 'build'], { cwd: rootDir, stdio: 'inherit' });
+  if (buildResult.status !== 0) {
+    console.error('Failed to build daemon');
+    process.exit(1);
+  }
+
   // Get the daemon script path
-  const daemonDir = join(dirname(import.meta.dir), 'packages', 'fleeter-daemon');
+  const daemonDir = join(rootDir, 'packages', 'fleeter-daemon');
   const daemonScript = join(daemonDir, 'dist', 'bin', 'daemon.js');
 
   if (!existsSync(daemonScript)) {
-    console.error(`Error: Daemon not built. Run 'bun run build' first.`);
+    console.error(`Error: Daemon not built.`);
     console.error(`Expected: ${daemonScript}`);
     process.exit(1);
   }

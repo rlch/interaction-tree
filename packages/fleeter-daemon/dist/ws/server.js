@@ -5,6 +5,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { v4 as uuidv4 } from 'uuid';
 import { isClientHello, isCommandMessage, isAgentToolCall } from './protocol.js';
 const DAEMON_VERSION = '0.1.0';
+const NO_SESSION_ERROR = 'No session connected. Use list_sessions to see available sessions, then connect_session to connect to one.';
 export class DaemonServer {
     wss = null;
     clients = new Map();
@@ -133,7 +134,7 @@ export class DaemonServer {
                     const session = this.sessionManager.connectClient(sessionId, clientId);
                     const clientEntry = this.clients.get(clientId);
                     if (clientEntry)
-                        clientEntry.client.currentSessionId = sessionId;
+                        clientEntry.client.currentSessionId = session.id;
                     // Send stored logs to the connecting client
                     const storedLogs = this.sessionManager.getLogs(sessionId, 500);
                     if (storedLogs.length > 0) {
@@ -189,7 +190,7 @@ export class DaemonServer {
                     const clientEntry = this.clients.get(clientId);
                     const sessionId = clientEntry?.client.currentSessionId;
                     if (!sessionId) {
-                        sendResponse({ success: false, error: 'No session connected' });
+                        sendResponse({ success: false, error: NO_SESSION_ERROR });
                         return;
                     }
                     const session = this.sessionManager.get(sessionId);
@@ -198,19 +199,17 @@ export class DaemonServer {
                         return;
                     }
                     const options = data;
-                    // Set status to 'starting' BEFORE awaiting runApp (which blocks until app.started)
                     this.sessionManager.updateStatus(sessionId, 'starting');
                     const flutterProcess = await this.flutterManager.runApp(sessionId, session.projectPath, options ?? {});
-                    // runApp resolves when app.started is received, so now it's running
-                    this.sessionManager.updateStatus(sessionId, 'running', { pid: flutterProcess.pid, vmServiceUri: flutterProcess.vmServiceUri });
-                    sendResponse({ success: true, data: { pid: flutterProcess.pid, vmServiceUri: flutterProcess.vmServiceUri } });
+                    this.sessionManager.updateStatus(sessionId, 'running', { pid: flutterProcess.pid });
+                    sendResponse({ success: true, data: { pid: flutterProcess.pid } });
                     break;
                 }
                 case 'stop_app': {
                     const clientEntry = this.clients.get(clientId);
                     const sessionId = clientEntry?.client.currentSessionId;
                     if (!sessionId) {
-                        sendResponse({ success: false, error: 'No session connected' });
+                        sendResponse({ success: false, error: NO_SESSION_ERROR });
                         return;
                     }
                     await this.flutterManager.stopApp(sessionId);
@@ -221,7 +220,7 @@ export class DaemonServer {
                     const clientEntry = this.clients.get(clientId);
                     const sessionId = clientEntry?.client.currentSessionId;
                     if (!sessionId) {
-                        sendResponse({ success: false, error: 'No session connected' });
+                        sendResponse({ success: false, error: NO_SESSION_ERROR });
                         return;
                     }
                     const success = this.flutterManager.hotReload(sessionId);
@@ -232,7 +231,7 @@ export class DaemonServer {
                     const clientEntry = this.clients.get(clientId);
                     const sessionId = clientEntry?.client.currentSessionId;
                     if (!sessionId) {
-                        sendResponse({ success: false, error: 'No session connected' });
+                        sendResponse({ success: false, error: NO_SESSION_ERROR });
                         return;
                     }
                     const success = this.flutterManager.hotRestart(sessionId);
@@ -243,7 +242,7 @@ export class DaemonServer {
                     const clientEntry = this.clients.get(clientId);
                     const sessionId = clientEntry?.client.currentSessionId;
                     if (!sessionId) {
-                        sendResponse({ success: false, error: 'No session connected' });
+                        sendResponse({ success: false, error: NO_SESSION_ERROR });
                         return;
                     }
                     const vmClient = this.vmClients.get(sessionId);
@@ -260,7 +259,7 @@ export class DaemonServer {
                     const clientEntry = this.clients.get(clientId);
                     const sessionId = clientEntry?.client.currentSessionId;
                     if (!sessionId) {
-                        sendResponse({ success: false, error: 'No session connected' });
+                        sendResponse({ success: false, error: NO_SESSION_ERROR });
                         return;
                     }
                     const options = data;
@@ -276,7 +275,7 @@ export class DaemonServer {
                     const clientEntry = this.clients.get(clientId);
                     const sessionId = clientEntry?.client.currentSessionId;
                     if (!sessionId) {
-                        sendResponse({ success: false, error: 'No session connected' });
+                        sendResponse({ success: false, error: NO_SESSION_ERROR });
                         return;
                     }
                     const session = this.sessionManager.get(sessionId);
@@ -285,8 +284,18 @@ export class DaemonServer {
                         return;
                     }
                     const { intent, conversationId } = data;
-                    // Get VM client for this session
                     const vmClient = this.vmClients.get(sessionId);
+                    const onEvent = (partialEvent) => {
+                        const streamEvent = {
+                            type: 'agent_stream',
+                            id,
+                            sessionId,
+                            event: partialEvent.event,
+                        };
+                        if (ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify(streamEvent));
+                        }
+                    };
                     try {
                         const result = await session.agent.execute({
                             intent,
@@ -294,6 +303,7 @@ export class DaemonServer {
                             vmClient,
                             sessionId,
                             cwd: session.projectPath,
+                            onEvent,
                         });
                         ws.send(JSON.stringify({
                             type: 'agent_response',
@@ -343,17 +353,12 @@ export class DaemonServer {
             sessionId,
             payload,
         };
-        const clientCount = this.clients.size;
-        console.error(`[ws] Broadcasting ${eventType} to ${clientCount} clients`);
         const message = JSON.stringify(event);
-        let sentCount = 0;
         for (const { ws } of this.clients.values()) {
             if (ws.readyState === WebSocket.OPEN) {
                 ws.send(message);
-                sentCount++;
             }
         }
-        console.error(`[ws] Sent ${eventType} to ${sentCount}/${clientCount} clients`);
     }
     getClientCount() {
         return this.clients.size;

@@ -107,6 +107,39 @@ pub enum IncomingMessage {
     AgentResponse(AgentResponse),
     /// Monitoring events from daemon (type: "event")
     Event(MonitoringEvent),
+    /// Streaming agent events (type: "agent_stream")
+    AgentStream(AgentStreamEvent),
+}
+
+/// Streaming event from agent execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentStreamEvent {
+    pub id: String,
+    #[serde(rename = "sessionId")]
+    pub session_id: String,
+    pub event: AgentEventKind,
+}
+
+/// Types of streaming events
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AgentEventKind {
+    TextDelta { text: String },
+    ToolCallStart { 
+        #[serde(rename = "toolName")]
+        tool_name: String, 
+        #[serde(rename = "toolCallId")]
+        tool_call_id: String 
+    },
+    ToolCallEnd { 
+        #[serde(rename = "toolName")]
+        tool_name: String, 
+        #[serde(rename = "toolCallId")]
+        tool_call_id: String,
+        result: Option<String>,
+    },
+    TaskComplete { summary: String },
+    Error { message: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

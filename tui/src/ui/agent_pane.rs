@@ -1,156 +1,212 @@
-use crate::app::App;
+use crate::app::{App, Mode};
+use crate::chat::{ChatContent, ChatMessage, ChatRole, ToolStatus};
+use crate::markdown::render_markdown;
 use crate::theme::theme;
-use crate::ws::protocol::MonitoringEvent;
+
 use ratatui::{
-    layout::Rect,
-    style::Style,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
-    // Guard against zero-size areas
     if area.width < 3 || area.height < 3 {
         return;
     }
 
-    let t = theme();
-    let agent_events: Vec<&MonitoringEvent> = app.filtered_agent_events().collect();
-    let event_count = agent_events.len();
-
-    let inner_height = area.height.saturating_sub(2) as usize;
-    let visible_start = app.scroll_offset;
-    let visible_end = (visible_start + inner_height).min(event_count);
-
-    let lines: Vec<Line> = agent_events
-        .iter()
-        .skip(visible_start)
-        .take(inner_height)
-        .map(|e| format_agent_event(e))
-        .collect();
-
-    let title = if let Some(ref filter) = app.filter {
-        format!(" Agent [{}/{}] filter: {} ", visible_end, event_count, filter)
+    // If in AgentChat mode, show chat with composer at bottom
+    // Otherwise show chat messages only (no composer)
+    let (chat_area, composer_area) = if matches!(app.mode, Mode::AgentChat) {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(3)])
+            .split(area);
+        (chunks[0], Some(chunks[1]))
     } else {
-        format!(" Agent [{}] ", event_count)
+        (area, None)
     };
+    
+    render_chat(frame, app, chat_area);
+    
+    if let Some(composer_area) = composer_area {
+        render_composer(frame, app, composer_area);
+    }
+}
 
+fn render_chat(frame: &mut Frame, app: &App, area: Rect) {
+    let t = theme();
+    
+    // Collect all lines from chat messages
+    let mut all_lines: Vec<Line<'static>> = Vec::new();
+    
+    // Render each chat message
+    for msg in &app.session.chat_messages {
+        all_lines.extend(render_message(msg));
+        all_lines.push(Line::default()); // blank line between messages
+    }
+    
+    // Render streaming content if any
+    if let Some(streaming) = &app.session.chat_streaming {
+        // Show "Claude ..." header
+        all_lines.push(Line::from(vec![
+            Span::styled("Claude", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw(" "),
+            Span::styled("...", Style::default().fg(Color::Yellow)),
+        ]));
+        
+        // Show streaming text
+        if !streaming.text_buffer.is_empty() {
+            all_lines.extend(render_markdown(&streaming.text_buffer));
+        }
+        
+        // Show streaming tool calls
+        for call in &streaming.tool_calls {
+            all_lines.extend(render_tool_call_lines(call));
+        }
+    }
+    
+    // If no messages yet, show hint
+    if app.session.chat_messages.is_empty() && app.session.chat_streaming.is_none() {
+        all_lines.push(Line::from(vec![
+            Span::styled("Press ", Style::default().fg(t.text_dim)),
+            Span::styled("Enter", Style::default().fg(t.text_highlight).add_modifier(Modifier::BOLD)),
+            Span::styled(" to start chatting with Claude", Style::default().fg(t.text_dim)),
+        ]));
+    }
+    
+    let title = format!(" Agent [{}] ", app.session.chat_messages.len());
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(t.border));
-
-    let paragraph = Paragraph::new(lines).block(block);
-    frame.render_widget(paragraph, area);
+    
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    
+    // Calculate scroll - auto-scroll to bottom
+    let content_height = all_lines.len() as u16;
+    let visible_height = inner.height;
+    let scroll = content_height.saturating_sub(visible_height);
+    
+    let paragraph = Paragraph::new(all_lines)
+        .wrap(Wrap { trim: false })
+        .scroll((scroll, 0));
+    frame.render_widget(paragraph, inner);
 }
 
-fn format_agent_event(event: &MonitoringEvent) -> Line<'static> {
+fn render_composer(frame: &mut Frame, app: &App, area: Rect) {
     let t = theme();
-
-    let (icon, icon_color, message) = match event.event_type.to_lowercase().as_str() {
-        "agent_success" => {
-            let summary = event
-                .payload
-                .get("summary")
-                .and_then(|v| v.as_str())
-                .map(|s| truncate(s, 60))
-                .unwrap_or_default();
-            ("✓", t.success, summary)
-        }
-        "agent_needs_context" => {
-            let question = event
-                .payload
-                .get("question")
-                .and_then(|v| v.as_str())
-                .map(|s| format!("Q: {}", truncate(s, 55)))
-                .unwrap_or_default();
-            ("?", t.warning, question)
-        }
-        "agent_error" => {
-            let error = event
-                .payload
-                .get("error")
-                .and_then(|v| v.as_str())
-                .map(|s| truncate(s, 60))
-                .unwrap_or_default();
-            ("✗", t.error, error)
-        }
-        t_str if t_str.contains("tool_call") => {
-            let tool_name = event
-                .payload
-                .get("tool")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-            let args_preview = event
-                .payload
-                .get("args")
-                .map(|v| summarize_value(v, 40))
-                .unwrap_or_default();
-            ("⚙", t.info, format!("{} {}", tool_name, args_preview))
-        }
-        t_str if t_str.contains("tool_result") => {
-            let result_preview = summarize_value(&event.payload, 50);
-            ("→", t.text_dim, result_preview)
-        }
-        _ => {
-            let summary = summarize_payload(&event.payload);
-            ("•", t.text, summary)
-        }
+    
+    let block = Block::default()
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(t.border));
+    
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    
+    // Prompt and input
+    let prompt = Span::styled("> ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD));
+    let input_text = if app.session.chat_input.is_empty() {
+        Span::styled("Type a message...", Style::default().fg(t.text_dim))
+    } else {
+        Span::styled(&app.session.chat_input, Style::default().fg(t.text))
     };
-
-    let ts = format_timestamp(&event.ts);
-
-    Line::from(vec![
-        Span::styled(format!("{} ", ts), Style::default().fg(t.text_dim)),
-        Span::styled(format!("{} ", icon), Style::default().fg(icon_color)),
-        Span::styled(
-            format!("{:8} ", truncate(&event.source, 8)),
-            Style::default().fg(t.source_agent),
-        ),
-        Span::styled(
-            format!("{:16} ", truncate(&event.event_type, 16)),
-            Style::default().fg(t.text),
-        ),
-        Span::styled(message, Style::default().fg(t.text_dim)),
-    ])
+    
+    let line = Line::from(vec![prompt, input_text]);
+    frame.render_widget(Paragraph::new(line), inner);
+    
+    // Show cursor
+    let cursor_x = inner.x + 2 + app.session.chat_cursor as u16;
+    let cursor_y = inner.y;
+    frame.set_cursor_position((cursor_x.min(inner.right().saturating_sub(1)), cursor_y));
 }
 
-fn format_timestamp(ts: &str) -> String {
-    if let Some(time_part) = ts.split('T').nth(1) {
-        let time = time_part.trim_end_matches('Z');
-        if time.len() >= 8 {
-            return time[..8].to_string();
+fn render_message(msg: &ChatMessage) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let t = theme();
+    
+    // Role header with timestamp
+    let (role_label, role_color) = match msg.role {
+        ChatRole::User => ("You", Color::Blue),
+        ChatRole::Assistant => ("Claude", Color::Green),
+    };
+    
+    lines.push(Line::from(vec![
+        Span::styled(role_label, Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
+        Span::raw(" "),
+        Span::styled(
+            msg.timestamp.format("%H:%M:%S").to_string(),
+            Style::default().fg(t.text_dim),
+        ),
+    ]));
+    
+    // Content
+    match &msg.content {
+        ChatContent::Text(text) => {
+            lines.extend(render_markdown(text));
         }
-    }
-    ts.chars().take(8).collect()
-}
-
-fn summarize_value(value: &serde_json::Value, max_len: usize) -> String {
-    match value {
-        serde_json::Value::Null => String::new(),
-        serde_json::Value::String(s) => truncate(s, max_len),
-        serde_json::Value::Object(map) => {
-            let keys: Vec<&str> = map.keys().map(|k| k.as_str()).take(3).collect();
-            if keys.is_empty() {
-                "{}".to_string()
-            } else {
-                truncate(&format!("{{{}}}", keys.join(", ")), max_len)
+        ChatContent::ToolCalls(calls) => {
+            for call in calls {
+                lines.extend(render_tool_call_lines(call));
             }
         }
-        serde_json::Value::Array(arr) => format!("[{} items]", arr.len()),
-        other => truncate(&other.to_string(), max_len),
     }
+    
+    lines
 }
 
-fn summarize_payload(payload: &serde_json::Value) -> String {
-    summarize_value(payload, 50)
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
+fn render_tool_call_lines(call: &crate::chat::ToolCall) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let t = theme();
+    
+    // Status icon and tool name
+    let (icon, icon_color) = match call.status {
+        ToolStatus::Running => ("⟳", Color::Yellow),
+        ToolStatus::Success => ("✓", Color::Green),
+        ToolStatus::Failed => ("✗", Color::Red),
+    };
+    
+    lines.push(Line::from(vec![
+        Span::styled(icon, Style::default().fg(icon_color)),
+        Span::raw(" "),
+        Span::styled(call.name.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+    ]));
+    
+    // Args preview
+    let args_str = call.args.to_string();
+    let preview = if args_str.len() > 60 {
+        format!("{}...", &args_str[..60])
     } else {
-        format!("{}…", &s.chars().take(max - 1).collect::<String>())
+        args_str
+    };
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(preview, Style::default().fg(t.text_dim)),
+    ]));
+    
+    // Output preview
+    if let Some(output) = &call.output {
+        let output_lines: Vec<String> = output.lines().take(3).map(|s| s.to_string()).collect();
+        for line in output_lines {
+            let truncated = if line.len() > 70 {
+                format!("{}...", &line[..70])
+            } else {
+                line
+            };
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(truncated, Style::default().fg(t.text_dim)),
+            ]));
+        }
+        if output.lines().count() > 3 {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled("...", Style::default().fg(t.text_dim)),
+            ]));
+        }
     }
+    
+    lines
 }

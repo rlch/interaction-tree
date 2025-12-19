@@ -33,7 +33,7 @@ export class Daemon {
   private setupFlutterEvents(): void {
     this.flutterManager.on('started', async (sessionId: string, vmServiceUri: string) => {
       log.daemon.info({ sessionId, vmServiceUri }, 'Flutter app started');
-      // Note: status is updated to 'running' in ws/server.ts after runApp() resolves
+      this.sessionManager.updateStatus(sessionId, 'running', { vmServiceUri });
       
       // Connect VM client
       const vmClient = new VMServiceClient();
@@ -66,11 +66,29 @@ export class Daemon {
           this.server.broadcastEvent('tree', 'tree.reloaded', {}, sessionId);
         });
 
+        vmClient.on('interaction', (event) => {
+          log.daemon.info({ sessionId, ...event }, 'Interaction executed');
+          this.server.broadcastEvent('interaction', 'interaction.executed', event, sessionId);
+        });
+
         // Fetch initial tree after connection
         log.tree.debug({ sessionId }, 'Fetching initial tree...');
         try {
           const tree = await vmClient.getTree({ summaryOnly: true });
           log.tree.info({ sessionId, nodeCount: Array.isArray(tree) ? tree.length : 0 }, 'Initial tree fetched');
+          // Debug: log first few nodes with their capabilities
+          if (Array.isArray(tree)) {
+            tree.slice(0, 3).forEach((node, i) => {
+              log.tree.debug({
+                idx: i,
+                id: node.id,
+                widgetType: node.widgetType,
+                capabilities: node.capabilities,
+                actions: node.actions,
+                childCount: node.children?.length ?? 0,
+              }, 'Tree node sample');
+            });
+          }
           this.server.broadcastEvent('tree', 'tree.updated', { tree }, sessionId);
         } catch (err) {
           log.tree.warn({ sessionId, err }, 'Initial tree fetch failed (extension may not be loaded)');

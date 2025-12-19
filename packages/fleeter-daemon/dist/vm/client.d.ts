@@ -8,6 +8,13 @@
  */
 import { EventEmitter } from 'events';
 import type { InteractionTarget, InteractionResult, BatchStep, BatchResult, GetTreeOptions, LogEntry, RuntimeError, HotReloadResult, AppStatus } from './types.js';
+/** Interaction event data emitted after execute() */
+export interface InteractionEvent {
+    id: string;
+    interaction: string;
+    args?: Record<string, unknown>;
+    result: InteractionResult;
+}
 /** Events emitted by VMServiceClient */
 export interface VMServiceEvents {
     /** Fired when tree may have changed (Frame, Navigation, Reload events) */
@@ -20,6 +27,8 @@ export interface VMServiceEvents {
     reload: () => void;
     /** Fired when connection closes */
     close: () => void;
+    /** Fired after an interaction is executed */
+    interaction: (event: InteractionEvent) => void;
 }
 export declare class VMServiceClient extends EventEmitter {
     private ws;

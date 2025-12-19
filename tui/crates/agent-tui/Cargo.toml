@@ -1,0 +1,27 @@
+[package]
+name = "agent-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Agent TUI for Claude interaction"
+
+[[bin]]
+name = "agent-tui"
+path = "src/main.rs"
+
+[dependencies]
+agent-protocol.workspace = true
+agent-backend.workspace = true
+ratatui.workspace = true
+crossterm = { workspace = true, features = ["event-stream"] }
+tokio.workspace = true
+futures-util.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+
+# Markdown
+pulldown-cmark = "0.13"
+textwrap = "0.16"
+unicode-width = "0.2"
+chrono.workspace = true
+uuid.workspace = true

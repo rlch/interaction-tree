@@ -1,9 +1,43 @@
-[package]
-name = "it-tui"
+[workspace]
+members = [".", "crates/agent-tui", "crates/agent-protocol", "crates/agent-backend"]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
-description = "TUI client for interaction-tree-server monitoring"
 license = "MIT"
+
+[workspace.dependencies]
+# Protocol
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Async
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+async-trait = "0.1"
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Utils
+anyhow = "1"
+tracing = "0.1"
+
+# Workspace crates
+agent-protocol = { path = "crates/agent-protocol" }
+agent-backend = { path = "crates/agent-backend" }
+
+[package]
+name = "it-tui"
+version.workspace = true
+edition.workspace = true
+description = "TUI client for interaction-tree-server monitoring"
+license.workspace = true
 
 [[bin]]
 name = "it-tui"
@@ -44,6 +78,8 @@ terminal-colorsaurus = "1.0"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 tracing-appender = "0.2"
 dirs = "5"
+pulldown-cmark = "0.13"
+textwrap = "0.16"
 
 [dev-dependencies]
 tokio-test = "0.4"

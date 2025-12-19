@@ -5,6 +5,7 @@
  * Authentication is handled by the Claude Code CLI in PATH.
  */
 import type { VMServiceClient } from '../vm/client.js';
+import type { AgentStreamEvent } from '../ws/protocol.js';
 export interface AgentConfig {
     /** Model to use (optional, uses SDK default) */
     model?: string;
@@ -29,10 +30,11 @@ export interface AgentExecutionResult {
     suggestions?: string[];
     conversationId?: string;
 }
+export type AgentStreamCallback = (event: Omit<AgentStreamEvent, 'type' | 'id' | 'sessionId'>) => void;
 /**
  * Execute an agent with the interaction tree tools bound to a specific VMClient.
  */
-export declare function executeAgent(systemPrompt: string, userMessage: string, config: AgentExecutorConfig, vmClient: VMServiceClient): Promise<AgentExecutionResult>;
+export declare function executeAgent(systemPrompt: string, userMessage: string, config: AgentExecutorConfig, vmClient: VMServiceClient, onEvent?: AgentStreamCallback): Promise<AgentExecutionResult>;
 /**
  * Get the default agent config.
  */
@@ -49,6 +51,7 @@ export declare class AgentExecutor {
         vmClient?: VMServiceClient;
         sessionId: string;
         cwd: string;
+        onEvent?: AgentStreamCallback;
     }): Promise<AgentExecutionResult>;
 }
 //# sourceMappingURL=executor.d.ts.map
