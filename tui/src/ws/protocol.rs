@@ -128,7 +128,8 @@ pub enum AgentEventKind {
         tool_call_id: String,
         result: Option<String>,
     },
-    TaskComplete { summary: String },
+    MessageComplete,  // Streaming finished for current message (immediate feedback)
+    TaskComplete { summary: String },  // Full task/turn complete
     Error { message: String },
 }
 

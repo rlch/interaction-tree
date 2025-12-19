@@ -525,11 +525,34 @@ export async function executeAgent(
         sessionId = message.session_id;
       }
 
-      // Handle streaming partial messages (text deltas)
+      // Handle streaming partial messages (text deltas, block boundaries)
       if (message.type === 'stream_event') {
-        const evt = message.event;
-        if (evt.type === 'content_block_delta' && evt.delta.type === 'text_delta') {
-          onEvent?.({ event: { kind: 'text_delta', text: evt.delta.text } });
+        const evt = message.event as {
+          type: string;
+          index?: number;
+          delta?: { type: string; text?: string };
+          content_block?: { type: string; name?: string; id?: string };
+        };
+        
+        // Text streaming
+        if (evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta') {
+          onEvent?.({ event: { kind: 'text_delta', text: evt.delta.text ?? '' } });
+        }
+        
+        // Tool block starting - emit tool_call_start immediately during streaming
+        // This preserves the correct ordering: text -> tool -> text
+        if (evt.type === 'content_block_start' && evt.content_block?.type === 'tool_use') {
+          onEvent?.({ event: { 
+            kind: 'tool_call_start', 
+            toolName: evt.content_block.name ?? '', 
+            toolCallId: evt.content_block.id ?? '' 
+          } });
+        }
+        
+        // Message streaming complete - emit message_complete for immediate UI feedback
+        // Don't wait for the full loop to finish (which includes SDK overhead)
+        if (evt.type === 'message_stop') {
+          onEvent?.({ event: { kind: 'message_complete' } });
         }
       }
 
@@ -538,9 +561,9 @@ export async function executeAgent(
           if (block.type === 'text') {
             textBlocks.push(block.text);
             // Don't emit text_delta here since we already streamed it via stream_event
-          } else if (block.type === 'tool_use') {
-            onEvent?.({ event: { kind: 'tool_call_start', toolName: block.name, toolCallId: block.id } });
           }
+          // Note: tool_call_start is now emitted via stream_event content_block_start
+          // to ensure correct ordering during streaming
         }
       }
 

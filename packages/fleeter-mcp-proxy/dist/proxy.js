@@ -113,6 +113,61 @@ const TOOLS = [
         description: 'Get daemon and session status',
         inputSchema: { type: 'object', properties: {} },
     },
+    // Widget state
+    {
+        name: 'get_state',
+        description: 'Get the state of a specific widget by its node ID',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                nodeId: { type: 'string', description: 'Target node ID' },
+            },
+            required: ['nodeId'],
+        },
+    },
+    // Batch operations
+    {
+        name: 'batch',
+        description: 'Execute multiple interactions in sequence',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                steps: {
+                    type: 'array',
+                    description: 'Array of interaction steps to execute',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            nodeId: { type: 'string', description: 'Target node ID' },
+                            interaction: { type: 'string', description: 'Interaction name' },
+                            args: { type: 'object', description: 'Interaction arguments' },
+                            delayMs: { type: 'number', description: 'Delay in milliseconds before this step' },
+                        },
+                        required: ['nodeId', 'interaction'],
+                    },
+                },
+            },
+            required: ['steps'],
+        },
+    },
+    // Error handling
+    {
+        name: 'get_errors',
+        description: 'Get runtime errors from the Flutter app',
+        inputSchema: { type: 'object', properties: {} },
+    },
+    // Session management (additional)
+    {
+        name: 'disconnect_session',
+        description: 'Disconnect from the current session without destroying it',
+        inputSchema: { type: 'object', properties: {} },
+    },
+    // Health
+    {
+        name: 'health_check',
+        description: 'Check if the daemon is healthy and responding',
+        inputSchema: { type: 'object', properties: {} },
+    },
 ];
 export class McpProxy {
     server;

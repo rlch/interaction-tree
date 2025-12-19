@@ -48,10 +48,10 @@ export type CommandAction =
   | 'hot_restart'
   // Interaction tree
   | 'get_tree'
-  | 'get_state'
   | 'execute_interaction'
+  | 'get_state'
   | 'batch'
-  // Logs & Errors
+  // Logs & errors
   | 'get_logs'
   | 'get_errors'
   // Agent
@@ -123,7 +123,8 @@ export type AgentEventType =
   | { kind: 'text_delta'; text: string }
   | { kind: 'tool_call_start'; toolName: string; toolCallId: string }
   | { kind: 'tool_call_end'; toolName: string; toolCallId: string; result?: string }
-  | { kind: 'task_complete'; summary: string }
+  | { kind: 'message_complete' }  // Streaming finished for current message (immediate UI feedback)
+  | { kind: 'task_complete'; summary: string }  // Full task/turn complete (after SDK finishes)
   | { kind: 'error'; message: string };
 
 export interface AgentStreamEvent {

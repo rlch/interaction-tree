@@ -10,7 +10,7 @@ use crate::ws::protocol::{AgentResponse, AgentStatus, CommandResponse, Monitorin
 // Re-export types for backward compatibility with existing code
 pub use crate::session::SessionState;
 pub use crate::types::{
-    AppStatus, ConfirmAction, ContentTab, ContextInfo, InputPromptKind,
+    Action, AppStatus, Capability, ConfirmAction, ContentTab, ContextInfo, InputPromptKind,
     InteractionAction, InteractionTree, LogEntry, LogLevel, LogViewMode, LogViewState, Mode,
     Toast, ToastLevel, TreeNode, WsState,
 };
@@ -393,7 +393,7 @@ impl App {
                 return;
             }
 
-            // Check if this is a session creation/connection response
+            // Check if this is a session creation response
             if let Some(session) = resp.data.get("session") {
                 match serde_json::from_value::<Session>(session.clone()) {
                     Ok(parsed) => {
@@ -406,20 +406,7 @@ impl App {
                         self.switch_to_session(session_id);
                         self.session_picker_index = self.sessions.len().saturating_sub(1);
                         self.mode = Mode::Normal;
-                        
-                        // Load chat history if present (for reconnecting to existing session)
-                        if let Some(chat_history) = resp.data.get("chatHistory") {
-                            tracing::debug!(?chat_history, "Raw chatHistory from daemon");
-                            let messages = crate::chat::parse_chat_history(chat_history);
-                            tracing::info!(count = messages.len(), roles = ?messages.iter().map(|m| &m.role).collect::<Vec<_>>(), "Parsed chat messages");
-                            if !messages.is_empty() {
-                                self.session.chat_messages = messages;
-                            }
-                        } else {
-                            tracing::warn!("No chatHistory in connect_session response");
-                        }
-                        
-                        self.push_toast(Toast::success("Session connected"));
+                        self.push_toast(Toast::success("Session created"));
                     }
                     Err(e) => {
                         tracing::error!(?e, ?session, "Failed to parse session response");
@@ -563,13 +550,16 @@ impl App {
                     }
                 }
             }
-            AgentEventKind::TaskComplete { summary: _ } => {
-                // Finalize streaming - convert buffer to message
+            AgentEventKind::MessageComplete => {
+                // Message streaming finished - finalize immediately for responsive UI
                 if let Some(streaming) = self.session.chat_streaming.take() {
                     if !streaming.text_buffer.is_empty() {
                         self.session.chat_messages.push(crate::chat::ChatMessage::assistant(&streaming.text_buffer));
                     }
                 }
+            }
+            AgentEventKind::TaskComplete { summary: _ } => {
+                // Full task complete (SDK finished) - mark response done
                 self.session.pending_response = false;
             }
             AgentEventKind::Error { message } => {
@@ -624,26 +614,6 @@ impl App {
         let count = self.current_log_count();
         self.log_view.cursor_bottom(count, self.log_viewport_height);
         self.scroll_offset = self.log_view.scroll;
-    }
-
-    /// Scroll chat up (increases scroll offset from bottom)
-    pub fn chat_scroll_up(&mut self) {
-        self.session.chat_scroll = self.session.chat_scroll.saturating_add(3);
-    }
-
-    /// Scroll chat down (decreases scroll offset, 0 = auto-scroll to bottom)
-    pub fn chat_scroll_down(&mut self) {
-        self.session.chat_scroll = self.session.chat_scroll.saturating_sub(3);
-    }
-
-    /// Scroll chat to top
-    pub fn chat_scroll_to_top(&mut self) {
-        self.session.chat_scroll = usize::MAX; // Will be clamped during render
-    }
-
-    /// Scroll chat to bottom (auto-scroll mode)
-    pub fn chat_scroll_to_bottom(&mut self) {
-        self.session.chat_scroll = 0;
     }
 
     /// Toggle visual line selection mode

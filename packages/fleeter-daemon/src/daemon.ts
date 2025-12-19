@@ -2,7 +2,7 @@
  * Main Fleeter Daemon class.
  */
 
-import { SessionManager } from './session/index.js';
+import { SessionManager, SessionService } from './session/index.js';
 import { DaemonServer } from './ws/index.js';
 import { FlutterProcessManager } from './flutter/index.js';
 import { VMServiceClient } from './vm/index.js';
@@ -25,7 +25,7 @@ export class Daemon {
     this.config = config;
     this.sessionManager = new SessionManager();
     this.flutterManager = new FlutterProcessManager();
-    this.server = new DaemonServer(this.sessionManager, this.flutterManager, this.vmClients);
+    this.server = new DaemonServer(this.sessionManager, this.flutterManager);
 
     this.setupFlutterEvents();
   }
@@ -47,6 +47,21 @@ export class Daemon {
         log.daemon.info({ sessionId, isConnected: vmClient.isConnected }, 'VM client connect() completed');
         
         this.vmClients.set(sessionId, vmClient);
+        
+        // Create SessionService and register with server
+        const session = this.sessionManager.get(sessionId);
+        if (session) {
+          const sessionService = new SessionService({
+            sessionId,
+            vmClient,
+            sessionManager: this.sessionManager,
+            processManager: this.flutterManager,
+            projectPath: session.projectPath,
+          });
+          this.server.registerSessionService(sessionId, sessionService);
+          log.daemon.info({ sessionId }, 'SessionService registered');
+        }
+        
         log.daemon.info({ sessionId, vmClientsCount: this.vmClients.size, vmClientsKeys: Array.from(this.vmClients.keys()) }, 'VM client added to vmClients map');
       } catch (err) {
         log.daemon.error({ sessionId, err, errMessage: err instanceof Error ? err.message : String(err), errStack: err instanceof Error ? err.stack : undefined }, 'Failed to connect VM client');
@@ -55,6 +70,7 @@ export class Daemon {
 
     this.flutterManager.on('exit', (sessionId: string) => {
       this.sessionManager.updateStatus(sessionId, 'stopped');
+      this.server.unregisterSessionService(sessionId);
       const vmClient = this.vmClients.get(sessionId);
       if (vmClient) {
         vmClient.disconnect();

@@ -17,7 +17,8 @@ import type {
 import { isClientHello, isCommandMessage, isAgentToolCall } from './protocol.js';
 import type { SessionManager } from '../session/index.js';
 import type { FlutterProcessManager } from '../flutter/index.js';
-import type { VMServiceClient, BatchStep } from '../vm/index.js';
+import type { BatchStep } from '../vm/index.js';
+import { SessionService } from '../session/service.js';
 import { log } from '../logger.js';
 
 const DAEMON_VERSION = '0.1.0';
@@ -34,16 +35,28 @@ export class DaemonServer {
   private clients = new Map<string, { client: ConnectedClient; ws: WebSocket }>();
   private sessionManager: SessionManager;
   private flutterManager: FlutterProcessManager;
-  private vmClients: Map<string, VMServiceClient>;
+  private sessionServices = new Map<string, SessionService>();
 
   constructor(
     sessionManager: SessionManager,
     flutterManager: FlutterProcessManager,
-    vmClients: Map<string, VMServiceClient>
   ) {
     this.sessionManager = sessionManager;
     this.flutterManager = flutterManager;
-    this.vmClients = vmClients;
+  }
+
+  registerSessionService(sessionId: string, service: SessionService): void {
+    this.sessionServices.set(sessionId, service);
+    log.ws.debug({ sessionId }, 'Registered session service');
+  }
+
+  unregisterSessionService(sessionId: string): void {
+    this.sessionServices.delete(sessionId);
+    log.ws.debug({ sessionId }, 'Unregistered session service');
+  }
+
+  getSessionService(sessionId: string): SessionService | undefined {
+    return this.sessionServices.get(sessionId);
   }
 
   start(config: DaemonServerConfig): void {
@@ -267,7 +280,12 @@ export class DaemonServer {
             sendResponse({ success: false, error: NO_SESSION_ERROR });
             return;
           }
-          await this.flutterManager.stopApp(sessionId);
+          const service = this.sessionServices.get(sessionId);
+          if (service) {
+            await service.stopApp();
+          } else {
+            await this.flutterManager.stopApp(sessionId);
+          }
           sendResponse({ success: true });
           break;
         }
@@ -279,13 +297,13 @@ export class DaemonServer {
             sendResponse({ success: false, error: NO_SESSION_ERROR });
             return;
           }
-          const vmClient = this.vmClients.get(sessionId);
-          if (!vmClient?.isConnected) {
+          const service = this.sessionServices.get(sessionId);
+          if (!service?.isVmConnected) {
             sendResponse({ success: false, error: 'VM client not connected' });
             return;
           }
           const clearErrors = (data as { clearRuntimeErrors?: boolean })?.clearRuntimeErrors ?? false;
-          const result = await vmClient.hotReload(clearErrors);
+          const result = await service.hotReload(clearErrors);
           sendResponse({ success: result.success, data: result, error: result.error });
           break;
         }
@@ -297,13 +315,13 @@ export class DaemonServer {
             sendResponse({ success: false, error: NO_SESSION_ERROR });
             return;
           }
-          const vmClient = this.vmClients.get(sessionId);
-          if (!vmClient?.isConnected) {
+          const service = this.sessionServices.get(sessionId);
+          if (!service?.isVmConnected) {
             sendResponse({ success: false, error: 'VM client not connected' });
             return;
           }
           const clearErrors = (data as { clearRuntimeErrors?: boolean })?.clearRuntimeErrors ?? true;
-          const result = await vmClient.hotRestart(clearErrors);
+          const result = await service.hotRestart(clearErrors);
           sendResponse({ success: result.success, data: result, error: result.error });
           break;
         }
@@ -315,13 +333,13 @@ export class DaemonServer {
             sendResponse({ success: false, error: NO_SESSION_ERROR });
             return;
           }
-          const vmClient = this.vmClients.get(sessionId);
-          if (!vmClient?.isConnected) {
+          const service = this.sessionServices.get(sessionId);
+          if (!service?.isVmConnected) {
             sendResponse({ success: false, error: 'Not connected to VM' });
             return;
           }
           const options = data as { summaryOnly?: boolean } | undefined;
-          const tree = await vmClient.getTree({ includeWidgetType: true, summaryOnly: options?.summaryOnly });
+          const tree = await service.getTree({ includeWidgetType: true, summaryOnly: options?.summaryOnly });
           sendResponse({ success: true, data: { tree } });
           break;
         }
@@ -333,9 +351,13 @@ export class DaemonServer {
             sendResponse({ success: false, error: NO_SESSION_ERROR });
             return;
           }
+          const service = this.sessionServices.get(sessionId);
+          if (!service) {
+            sendResponse({ success: false, error: 'Session service not found' });
+            return;
+          }
           const options = data as { maxLines?: number } | undefined;
-          // Get logs from session (persisted) instead of process (ephemeral)
-          const logs = this.sessionManager.getLogs(sessionId, options?.maxLines);
+          const logs = service.getLogs(options?.maxLines);
           sendResponse({ success: true, data: { logs } });
           break;
         }
@@ -347,8 +369,8 @@ export class DaemonServer {
             sendResponse({ success: false, error: NO_SESSION_ERROR });
             return;
           }
-          const vmClient = this.vmClients.get(sessionId);
-          if (!vmClient?.isConnected) {
+          const service = this.sessionServices.get(sessionId);
+          if (!service?.isVmConnected) {
             sendResponse({ success: false, error: 'VM client not connected' });
             return;
           }
@@ -362,7 +384,7 @@ export class DaemonServer {
             return;
           }
           try {
-            const result = await vmClient.execute(nodeId, interaction, args);
+            const result = await service.execute(nodeId, interaction, args);
             sendResponse({ success: true, data: result });
           } catch (err) {
             sendResponse({
@@ -380,8 +402,8 @@ export class DaemonServer {
             sendResponse({ success: false, error: NO_SESSION_ERROR });
             return;
           }
-          const vmClient = this.vmClients.get(sessionId);
-          if (!vmClient?.isConnected) {
+          const service = this.sessionServices.get(sessionId);
+          if (!service?.isVmConnected) {
             sendResponse({ success: false, error: 'VM client not connected' });
             return;
           }
@@ -391,7 +413,7 @@ export class DaemonServer {
             return;
           }
           try {
-            const state = await vmClient.getState(nodeId);
+            const state = await service.getState(nodeId);
             sendResponse({ success: true, data: { state } });
           } catch (err) {
             sendResponse({
@@ -409,8 +431,8 @@ export class DaemonServer {
             sendResponse({ success: false, error: NO_SESSION_ERROR });
             return;
           }
-          const vmClient = this.vmClients.get(sessionId);
-          if (!vmClient?.isConnected) {
+          const service = this.sessionServices.get(sessionId);
+          if (!service?.isVmConnected) {
             sendResponse({ success: false, error: 'VM client not connected' });
             return;
           }
@@ -420,7 +442,7 @@ export class DaemonServer {
             return;
           }
           try {
-            const result = await vmClient.batch(steps);
+            const result = await service.batch(steps);
             sendResponse({ success: true, data: result });
           } catch (err) {
             sendResponse({
@@ -438,14 +460,17 @@ export class DaemonServer {
             sendResponse({ success: false, error: NO_SESSION_ERROR });
             return;
           }
-          const vmClient = this.vmClients.get(sessionId);
-          if (!vmClient?.isConnected) {
+          const service = this.sessionServices.get(sessionId);
+          if (!service?.isVmConnected) {
             sendResponse({ success: false, error: 'VM client not connected' });
             return;
           }
           const { clear } = data as { clear?: boolean } | undefined ?? {};
           try {
-            const errors = await vmClient.getRuntimeErrors(clear);
+            const errors = await service.getRuntimeErrors();
+            if (clear) {
+              service.clearRuntimeErrors();
+            }
             sendResponse({ success: true, data: { errors } });
           } catch (err) {
             sendResponse({
@@ -483,8 +508,8 @@ export class DaemonServer {
             timestamp: new Date().toISOString(),
           });
 
-          const vmClient = this.vmClients.get(sessionId);
-          log.agent.debug({ hasVmClient: !!vmClient }, 'VM client status');
+          const service = this.sessionServices.get(sessionId);
+          log.agent.debug({ hasService: !!service, isVmConnected: service?.isVmConnected }, 'Session service status');
 
           // Track text and tool calls for chat history
           let textBuffer = '';
@@ -555,7 +580,7 @@ export class DaemonServer {
             log.agent.debug({ sessionId }, 'Calling agent.execute');
             const result = await session.agent.execute({
               intent,
-              vmClient,
+              vmClient: service?.client,
               sessionManager: this.sessionManager,
               flutterManager: this.flutterManager,
               sessionId,
