@@ -12,6 +12,12 @@ const PLIST_NAME = 'com.fleeter.daemon.plist';
 const PLIST_PATH = join(homedir(), 'Library', 'LaunchAgents', PLIST_NAME);
 
 async function main() {
+  // Always kill any running daemon processes first
+  const pkillResult = spawnSync('pkill', ['-f', 'fleeter-daemon/dist/bin/daemon.js'], { stdio: 'inherit' });
+  if (pkillResult.status === 0) {
+    console.log('✓ Killed daemon process');
+  }
+
   if (!existsSync(PLIST_PATH)) {
     console.log('Fleeter daemon service is not installed.');
     return;
@@ -24,12 +30,6 @@ async function main() {
     console.log('✓ Service unloaded');
   } else {
     console.log('⚠ Service may not have been running');
-  }
-
-  // Force kill any remaining daemon processes
-  const pkillResult = spawnSync('pkill', ['-f', 'fleeter-daemon/dist/bin/daemon.js'], { stdio: 'inherit' });
-  if (pkillResult.status === 0) {
-    console.log('✓ Killed remaining daemon process');
   }
 
   unlinkSync(PLIST_PATH);
