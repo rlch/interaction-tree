@@ -7,11 +7,11 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
 
-pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
+pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     if area.width < 3 || area.height < 3 {
         return;
     }
@@ -27,16 +27,19 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
     render_composer(frame, app, composer_area);
 }
 
-fn render_chat(frame: &mut Frame, app: &mut App, area: Rect) {
+fn render_chat(frame: &mut Frame, app: &App, area: Rect) {
     let t = theme();
     
     // Collect all lines from chat messages
     let mut all_lines: Vec<Line<'static>> = Vec::new();
     
-    // Render each chat message
+    // Render each chat message, grouping consecutive messages from same role
+    let mut prev_role: Option<ChatRole> = None;
     for msg in &app.session.chat_messages {
-        all_lines.extend(render_message(msg));
+        let show_header = prev_role != Some(msg.role);
+        all_lines.extend(render_message(msg, show_header));
         all_lines.push(Line::default()); // blank line between messages
+        prev_role = Some(msg.role);
     }
     
     // Render streaming content if any
@@ -99,39 +102,15 @@ fn render_chat(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
     
-    // Calculate scroll
-    let content_height = all_lines.len();
-    let visible_height = inner.height as usize;
-    let max_scroll = content_height.saturating_sub(visible_height);
-    
-    // Clamp scroll to valid range
-    app.session.chat_scroll = app.session.chat_scroll.min(max_scroll);
-    
-    // If scroll is 0, auto-scroll to bottom; otherwise use manual scroll position
-    let scroll = if app.session.chat_scroll == 0 {
-        max_scroll
-    } else {
-        max_scroll.saturating_sub(app.session.chat_scroll)
-    };
+    // Calculate scroll - auto-scroll to bottom
+    let content_height = all_lines.len() as u16;
+    let visible_height = inner.height;
+    let scroll = content_height.saturating_sub(visible_height);
     
     let paragraph = Paragraph::new(all_lines)
         .wrap(Wrap { trim: false })
-        .scroll((scroll as u16, 0));
+        .scroll((scroll, 0));
     frame.render_widget(paragraph, inner);
-    
-    // Render scrollbar if content exceeds visible area
-    if content_height > visible_height {
-        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(Some("↑"))
-            .end_symbol(Some("↓"));
-        let mut scrollbar_state = ScrollbarState::new(max_scroll)
-            .position(scroll);
-        frame.render_stateful_widget(
-            scrollbar,
-            inner,
-            &mut scrollbar_state,
-        );
-    }
 }
 
 fn render_composer(frame: &mut Frame, app: &App, area: Rect) {
@@ -167,24 +146,21 @@ fn render_composer(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn render_message(msg: &ChatMessage) -> Vec<Line<'static>> {
+fn render_message(msg: &ChatMessage, show_header: bool) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let t = theme();
     
-    // Role header with timestamp
-    let (role_label, role_color) = match msg.role {
-        ChatRole::User => ("You", Color::Blue),
-        ChatRole::Assistant => ("Claude", Color::Green),
-    };
-    
-    lines.push(Line::from(vec![
-        Span::styled(role_label, Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
-        Span::raw(" "),
-        Span::styled(
-            msg.timestamp.format("%H:%M:%S").to_string(),
-            Style::default().fg(t.text_dim),
-        ),
-    ]));
+    // Role header - only shown for first message in a sequence from same role
+    if show_header {
+        let (role_label, role_color) = match msg.role {
+            ChatRole::User => ("You", Color::Blue),
+            ChatRole::Assistant => ("Claude", Color::Green),
+        };
+        lines.push(Line::from(Span::styled(
+            role_label,
+            Style::default().fg(role_color).add_modifier(Modifier::BOLD),
+        )));
+    }
     
     // Content
     match &msg.content {
@@ -195,6 +171,12 @@ fn render_message(msg: &ChatMessage) -> Vec<Line<'static>> {
             lines.extend(render_tool_call_lines(call));
         }
     }
+    
+    // Timestamp below content
+    lines.push(Line::from(Span::styled(
+        msg.timestamp.format("%H:%M:%S").to_string(),
+        Style::default().fg(t.text_dim),
+    )));
     
     lines
 }
