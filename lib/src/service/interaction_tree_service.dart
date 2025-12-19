@@ -229,10 +229,10 @@ class InteractionTreeService {
           json['state'] = target.getState();
         }
 
-        // Collect ancestor InteractionContext descriptions
+        // Collect ancestor InteractionContext info
         final contexts = InteractionContext.allOf(element);
         if (contexts.isNotEmpty) {
-          json['context'] = contexts;
+          json['contexts'] = contexts.map((c) => c.toJson()).toList();
         }
 
         targets.add(json);

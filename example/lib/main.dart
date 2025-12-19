@@ -61,6 +61,7 @@ class _HomePageState extends State<HomePage> {
         children: [
           // Counter card - wrapped in InteractionContext for hierarchy
           InteractionContext(
+            name: 'counter-section',
             description:
                 'Counter section for incrementing/decrementing a value',
             child: Card(
@@ -111,6 +112,7 @@ class _HomePageState extends State<HomePage> {
 
           // Navigation buttons - wrapped in InteractionContext
           InteractionContext(
+            name: 'navigation-section',
             description:
                 'Navigation section with buttons to open pages and modals',
             child: Card(
@@ -160,6 +162,7 @@ class _HomePageState extends State<HomePage> {
 
           // Dynamic list - wrapped in InteractionContext
           InteractionContext(
+            name: 'items-section',
             description: 'Dynamic item list that can be modified',
             child: Card(
               child: Padding(

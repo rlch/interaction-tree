@@ -18,6 +18,114 @@ pub enum InteractionAction {
     Custom(String),
 }
 
+/// Log viewer mode (vim-like)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LogViewMode {
+    #[default]
+    Normal,
+    Visual,
+}
+
+/// State for vim-like log viewing with cursor and selection
+#[derive(Debug, Clone, Default)]
+pub struct LogViewState {
+    pub cursor: usize,
+    pub scroll: usize,
+    pub anchor: Option<usize>,
+    pub mode: LogViewMode,
+}
+
+impl LogViewState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn selection_range(&self) -> Option<(usize, usize)> {
+        self.anchor.map(|anchor| {
+            let start = anchor.min(self.cursor);
+            let end = anchor.max(self.cursor);
+            (start, end)
+        })
+    }
+
+    pub fn is_selected(&self, line: usize) -> bool {
+        match self.mode {
+            LogViewMode::Normal => false,
+            LogViewMode::Visual => {
+                if let Some((start, end)) = self.selection_range() {
+                    line >= start && line <= end
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    pub fn cursor_up(&mut self, viewport_height: usize) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+            self.ensure_cursor_visible(viewport_height);
+        }
+    }
+
+    pub fn cursor_down(&mut self, total_lines: usize, viewport_height: usize) {
+        if total_lines > 0 && self.cursor < total_lines - 1 {
+            self.cursor += 1;
+            self.ensure_cursor_visible(viewport_height);
+        }
+    }
+
+    pub fn cursor_top(&mut self) {
+        self.cursor = 0;
+        self.scroll = 0;
+    }
+
+    pub fn cursor_bottom(&mut self, total_lines: usize, viewport_height: usize) {
+        if total_lines > 0 {
+            self.cursor = total_lines - 1;
+            self.ensure_cursor_visible(viewport_height);
+        }
+    }
+
+    pub fn enter_visual(&mut self) {
+        self.mode = LogViewMode::Visual;
+        self.anchor = Some(self.cursor);
+    }
+
+    pub fn exit_visual(&mut self) {
+        self.mode = LogViewMode::Normal;
+        self.anchor = None;
+    }
+
+    pub fn toggle_visual(&mut self) {
+        match self.mode {
+            LogViewMode::Normal => self.enter_visual(),
+            LogViewMode::Visual => self.exit_visual(),
+        }
+    }
+
+    fn ensure_cursor_visible(&mut self, viewport_height: usize) {
+        if viewport_height == 0 {
+            return;
+        }
+        if self.cursor < self.scroll {
+            self.scroll = self.cursor;
+        }
+        if self.cursor >= self.scroll + viewport_height {
+            self.scroll = self.cursor - viewport_height + 1;
+        }
+    }
+
+    pub fn clamp_cursor(&mut self, total_lines: usize) {
+        if total_lines == 0 {
+            self.cursor = 0;
+            self.scroll = 0;
+        } else if self.cursor >= total_lines {
+            self.cursor = total_lines - 1;
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct InteractionTree {
     pub nodes: Vec<TreeNode>,
@@ -91,6 +199,14 @@ impl SessionState {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ContextInfo {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TreeNode {
     pub id: String,
     #[serde(default)]
@@ -101,6 +217,8 @@ pub struct TreeNode {
     pub actions: Vec<Action>,
     #[serde(default)]
     pub children: Vec<TreeNode>,
+    #[serde(default)]
+    pub contexts: Vec<ContextInfo>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -213,6 +331,11 @@ pub struct App {
     pub content_tab: ContentTab,
     pub scroll_offset: usize,
 
+    /// Log viewer state (cursor, selection, viewport)
+    pub log_view: LogViewState,
+    /// Cached viewport height for log navigation
+    pub log_viewport_height: usize,
+
     pub needs_tree_fetch: bool,
     pub pending_session_connect: Option<String>,
 
@@ -312,6 +435,9 @@ impl App {
             filter: None,
             content_tab: ContentTab::default(),
             scroll_offset: 0,
+
+            log_view: LogViewState::new(),
+            log_viewport_height: 0,
 
             needs_tree_fetch: false,
             pending_session_connect: None,
@@ -898,12 +1024,26 @@ impl App {
                     .and_then(|c| c.as_array())
                     .map(|arr| Self::parse_tree_nodes(arr))
                     .unwrap_or_default();
+                let contexts = t
+                    .get("contexts")
+                    .and_then(|c| c.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|ctx| {
+                                let name = ctx.get("name")?.as_str()?.to_string();
+                                let description = ctx.get("description").and_then(|d| d.as_str()).map(String::from);
+                                Some(ContextInfo { name, description })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 Some(TreeNode {
                     id,
                     widget_type,
                     capabilities,
                     actions,
                     children,
+                    contexts,
                 })
             })
             .collect()
@@ -1013,19 +1153,95 @@ impl App {
     }
 
     pub fn scroll_up(&mut self) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(1);
+        if self.content_tab == ContentTab::Flutter {
+            let count = self.current_log_count();
+            self.log_view.cursor_up(self.log_viewport_height);
+            self.log_view.clamp_cursor(count);
+        } else {
+            self.scroll_offset = self.scroll_offset.saturating_sub(1);
+        }
     }
 
     pub fn scroll_down(&mut self) {
-        let event_count = match self.content_tab {
+        if self.content_tab == ContentTab::Flutter {
+            let count = self.current_log_count();
+            self.log_view.cursor_down(count, self.log_viewport_height);
+        } else {
+            let event_count = match self.content_tab {
+                ContentTab::Flutter => 0, // Handled above
+                ContentTab::Agent => self.filtered_agent_events().count(),
+                ContentTab::Interactions => self.filtered_interaction_logs().count(),
+                ContentTab::Tree => return, // Tree uses tree_state navigation
+            };
+            if event_count > 0 && self.scroll_offset < event_count - 1 {
+                self.scroll_offset += 1;
+            }
+        }
+    }
+
+    pub fn scroll_to_top(&mut self) {
+        self.log_view.cursor_top();
+        self.scroll_offset = 0;
+    }
+
+    pub fn scroll_to_bottom(&mut self) {
+        let count = self.current_log_count();
+        self.log_view.cursor_bottom(count, self.log_viewport_height);
+        if count > 0 {
+            self.scroll_offset = count.saturating_sub(1);
+        }
+    }
+
+    pub fn toggle_visual_mode(&mut self) {
+        self.log_view.toggle_visual();
+    }
+
+    pub fn exit_visual_mode(&mut self) {
+        self.log_view.exit_visual();
+    }
+
+    pub fn in_visual_mode(&self) -> bool {
+        self.log_view.mode == LogViewMode::Visual
+    }
+
+    pub fn current_log_count(&self) -> usize {
+        match self.content_tab {
             ContentTab::Flutter => self.filtered_flutter_logs().count(),
             ContentTab::Agent => self.filtered_agent_events().count(),
             ContentTab::Interactions => self.filtered_interaction_logs().count(),
-            ContentTab::Tree => return, // Tree uses tree_state navigation
-        };
-        if event_count > 0 && self.scroll_offset < event_count - 1 {
-            self.scroll_offset += 1;
+            ContentTab::Tree => 0,
         }
+    }
+
+    pub fn yank_logs(&mut self) -> Option<String> {
+        if self.content_tab != ContentTab::Flutter {
+            return None;
+        }
+
+        let logs: Vec<&FlutterLogEntry> = self.filtered_flutter_logs().collect();
+        if logs.is_empty() {
+            return None;
+        }
+
+        let text = if self.in_visual_mode() {
+            if let Some((start, end)) = self.log_view.selection_range() {
+                let lines: Vec<String> = logs
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i >= start && *i <= end)
+                    .map(|(_, log)| log.to_plain_text())
+                    .collect();
+                self.exit_visual_mode();
+                if lines.is_empty() { None } else { Some(lines.join("
+")) }
+            } else {
+                None
+            }
+        } else {
+            logs.get(self.log_view.cursor).map(|log| log.to_plain_text())
+        };
+
+        text
     }
 
     pub fn tree_up(&mut self) {
@@ -1299,7 +1515,7 @@ mod tests {
             id: "1".to_string(),
             status: AgentStatus::NeedsContext,
             summary: None,
-            question: Some("Which button?".to_string()),
+            question: Some("Which button?".to_string()), sdk_session_id: None,
         };
 
         app.handle_agent_response(resp);
@@ -1315,7 +1531,7 @@ mod tests {
             id: "1".to_string(),
             status: AgentStatus::Success,
             summary: Some("Done".to_string()),
-            question: None,
+            question: None, sdk_session_id: None,
             
         };
 
@@ -1332,7 +1548,7 @@ mod tests {
             id: "1".to_string(),
             status: AgentStatus::Success,
             summary: Some("Task completed".to_string()),
-            question: None,
+            question: None, sdk_session_id: None,
             
         };
 
@@ -1352,7 +1568,7 @@ mod tests {
             id: "1".to_string(),
             status: AgentStatus::Error,
             summary: Some("Something went wrong".to_string()),
-            question: None,
+            question: None, sdk_session_id: None,
             
         };
 

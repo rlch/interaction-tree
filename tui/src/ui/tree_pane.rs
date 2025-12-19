@@ -70,9 +70,14 @@ fn build_entry_item(
     sibling_index: usize,
 ) -> TreeItem<'static, String> {
     match entry {
-        TreeEntry::Context { context, children } => {
+        TreeEntry::Context { context, description, children } => {
+            let label_text = if let Some(desc) = description {
+                format!("[{}]: \"{}\"", context, desc)
+            } else {
+                format!("[{}]", context)
+            };
             let label = Line::from(Span::styled(
-                context.clone(),
+                label_text,
                 Style::new().add_modifier(Modifier::BOLD),
             ));
             let child_items: Vec<_> = children

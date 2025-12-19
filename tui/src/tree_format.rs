@@ -12,7 +12,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::app::{TreeNode, Capability, Action};
+use crate::app::{Action, Capability, ContextInfo, TreeNode};
 
 /// A schema describes a unique InteractionKey definition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +58,8 @@ pub enum TreeEntry {
     /// Semantic grouping via InteractionContext widget
     Context {
         context: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         children: Vec<TreeEntry>,
     },
@@ -101,8 +103,12 @@ impl TreeEntry {
         let continuation = if is_last { "    " } else { "│   " };
 
         match self {
-            TreeEntry::Context { context, children } => {
-                writeln!(f, "{}{}", prefix, context)?;
+            TreeEntry::Context { context, description, children } => {
+                write!(f, "{}{}[{}]", prefix, connector, context)?;
+                if let Some(desc) = description {
+                    write!(f, ": \"{}\"", desc)?;
+                }
+                writeln!(f)?;
                 let child_prefix = format!("{}{}", prefix, continuation);
                 for (i, child) in children.iter().enumerate() {
                     child.fmt_tree(f, &child_prefix, i == children.len() - 1)?;
@@ -196,8 +202,11 @@ impl TreeEntry {
                     children[0].fmt_inline(f)?;
                 }
             }
-            TreeEntry::Context { context, .. } => {
-                write!(f, "{}", context)?;
+            TreeEntry::Context { context, description, .. } => {
+                write!(f, "[{}]", context)?;
+                if let Some(desc) = description {
+                    write!(f, ": \"{}\"", desc)?;
+                }
             }
             TreeEntry::Variants { id, .. } => {
                 write!(f, "{}", id)?;
@@ -232,7 +241,8 @@ impl CompactTree {
         let mut extractor = SchemaExtractor::new();
         extractor.extract_from_nodes(nodes);
 
-        let tree = compact_siblings(nodes);
+        // Build context-grouped tree
+        let tree = build_context_tree(nodes);
 
         (
             CompactTree {
@@ -356,6 +366,76 @@ fn child_fingerprint(node: &TreeNode) -> String {
     child_ids.join(",")
 }
 
+/// Build a context-grouped tree from flat nodes.
+/// Nodes are grouped under their InteractionContext ancestors.
+fn build_context_tree(nodes: &[TreeNode]) -> Vec<TreeEntry> {
+    if nodes.is_empty() {
+        return Vec::new();
+    }
+
+    // Collect all unique context paths
+    let mut context_map: HashMap<Vec<String>, (Vec<ContextInfo>, Vec<&TreeNode>)> = HashMap::new();
+    let mut no_context_nodes: Vec<&TreeNode> = Vec::new();
+
+    for node in nodes {
+        if node.contexts.is_empty() {
+            no_context_nodes.push(node);
+        } else {
+            let context_path: Vec<String> = node.contexts.iter().map(|c| c.name.clone()).collect();
+            let entry = context_map.entry(context_path).or_insert_with(|| (node.contexts.clone(), Vec::new()));
+            entry.1.push(node);
+        }
+    }
+
+    let mut result = Vec::new();
+
+    // First, add nodes without context
+    if !no_context_nodes.is_empty() {
+        let owned: Vec<TreeNode> = no_context_nodes.iter().map(|n| (*n).clone()).collect();
+        result.extend(compact_siblings(&owned));
+    }
+
+    // Then build nested context structure
+    // Sort context paths for consistent output
+    let mut context_paths: Vec<_> = context_map.keys().cloned().collect();
+    context_paths.sort();
+
+    // Build a nested tree from context paths
+    for context_path in context_paths {
+        let (contexts, nodes_in_context) = context_map.remove(&context_path).unwrap();
+        let owned_nodes: Vec<TreeNode> = nodes_in_context.iter().map(|n| (*n).clone()).collect();
+        let children = compact_siblings(&owned_nodes);
+
+        // Build nested context entries from innermost to outermost
+        let entry = build_nested_contexts(&contexts, children);
+        result.push(entry);
+    }
+
+    result
+}
+
+/// Build nested TreeEntry::Context from a list of contexts (outermost first).
+fn build_nested_contexts(contexts: &[ContextInfo], innermost_children: Vec<TreeEntry>) -> TreeEntry {
+    if contexts.is_empty() {
+        // Shouldn't happen, but return a heterogeneous entry as fallback
+        return TreeEntry::Heterogeneous { items: innermost_children };
+    }
+
+    // Build from innermost to outermost
+    let mut current_children = innermost_children;
+
+    for ctx in contexts.iter().rev() {
+        current_children = vec![TreeEntry::Context {
+            context: ctx.name.clone(),
+            description: ctx.description.clone(),
+            children: current_children,
+        }];
+    }
+
+    // Return the outermost context (unwrap the vec since we always have exactly one)
+    current_children.into_iter().next().unwrap()
+}
+
 /// Compact a list of sibling nodes into TreeEntries.
 fn compact_siblings(nodes: &[TreeNode]) -> Vec<TreeEntry> {
     if nodes.is_empty() {
@@ -477,7 +557,10 @@ mod tests {
         TreeNode {
             id: id.to_string(),
             widget_type: None,
+            capabilities: Vec::new(),
+            actions: Vec::new(),
             children,
+            contexts: Vec::new(),
         }
     }
 
@@ -485,7 +568,21 @@ mod tests {
         TreeNode {
             id: id.to_string(),
             widget_type: Some(widget_type.to_string()),
+            capabilities: Vec::new(),
+            actions: Vec::new(),
             children,
+            contexts: Vec::new(),
+        }
+    }
+
+    fn make_node_with_context(id: &str, contexts: Vec<ContextInfo>, children: Vec<TreeNode>) -> TreeNode {
+        TreeNode {
+            id: id.to_string(),
+            widget_type: None,
+            capabilities: Vec::new(),
+            actions: Vec::new(),
+            children,
+            contexts,
         }
     }
 
@@ -1005,6 +1102,7 @@ mod tests {
 
         let context = TreeEntry::Context {
             context: "Cart".to_string(),
+            description: None,
             children: vec![],
         };
         assert_eq!(context.id(), None);
@@ -1413,6 +1511,134 @@ mod tests {
         └── copyright
 ";
 
+        assert_eq!(output, expected);
+    }
+
+    // =========================================================================
+    // Context grouping tests
+    // =========================================================================
+
+    #[test]
+    fn test_context_grouping_single() {
+        let nodes = vec![
+            make_node_with_context(
+                "name-field",
+                vec![ContextInfo {
+                    name: "user-profile".to_string(),
+                    description: Some("User profile section".to_string()),
+                }],
+                vec![],
+            ),
+            make_node_with_context(
+                "email-field",
+                vec![ContextInfo {
+                    name: "user-profile".to_string(),
+                    description: Some("User profile section".to_string()),
+                }],
+                vec![],
+            ),
+        ];
+
+        let (tree, _) = CompactTree::from_tree_nodes(&nodes);
+
+        assert_eq!(tree.tree.len(), 1);
+        match &tree.tree[0] {
+            TreeEntry::Context { context, description, children } => {
+                assert_eq!(context, "user-profile");
+                assert_eq!(description.as_deref(), Some("User profile section"));
+                assert_eq!(children.len(), 2);
+            }
+            _ => panic!("Expected Context entry"),
+        }
+    }
+
+    #[test]
+    fn test_context_grouping_nested() {
+        let nodes = vec![
+            make_node_with_context(
+                "save-btn",
+                vec![
+                    ContextInfo {
+                        name: "settings".to_string(),
+                        description: Some("Settings page".to_string()),
+                    },
+                    ContextInfo {
+                        name: "form".to_string(),
+                        description: None,
+                    },
+                ],
+                vec![],
+            ),
+        ];
+
+        let (tree, _) = CompactTree::from_tree_nodes(&nodes);
+
+        assert_eq!(tree.tree.len(), 1);
+        match &tree.tree[0] {
+            TreeEntry::Context { context, description, children } => {
+                assert_eq!(context, "settings");
+                assert_eq!(description.as_deref(), Some("Settings page"));
+                // Should have nested "form" context
+                match &children[0] {
+                    TreeEntry::Context { context: inner_ctx, children: inner_children, .. } => {
+                        assert_eq!(inner_ctx, "form");
+                        assert_eq!(inner_children.len(), 1);
+                    }
+                    _ => panic!("Expected nested Context entry"),
+                }
+            }
+            _ => panic!("Expected Context entry"),
+        }
+    }
+
+    #[test]
+    fn test_context_grouping_mixed() {
+        let nodes = vec![
+            make_node("header", vec![]),
+            make_node_with_context(
+                "profile-name",
+                vec![ContextInfo {
+                    name: "profile".to_string(),
+                    description: None,
+                }],
+                vec![],
+            ),
+        ];
+
+        let (tree, _) = CompactTree::from_tree_nodes(&nodes);
+
+        // Should have header (no context) and profile context
+        assert_eq!(tree.tree.len(), 2);
+    }
+
+    #[test]
+    fn test_context_printable() {
+        let tree = CompactTree {
+            schemas: BTreeMap::new(),
+            tree: vec![TreeEntry::Context {
+                context: "user-profile".to_string(),
+                description: Some("User profile section".to_string()),
+                children: vec![
+                    TreeEntry::Singleton {
+                        id: "name-field".to_string(),
+                        children: vec![],
+                    },
+                    TreeEntry::Singleton {
+                        id: "email-field".to_string(),
+                        children: vec![],
+                    },
+                ],
+            }],
+        };
+
+        let output = tree.to_printable();
+
+        let expected = "\
+[Tree]
+└── [user-profile]: \"User profile section\"
+    ├── name-field
+    └── email-field
+";
         assert_eq!(output, expected);
     }
 }

@@ -173,6 +173,52 @@ impl FlutterLogEntry {
             _ => false,
         }
     }
+
+    /// Convert to plain text for yanking/copying
+    pub fn to_plain_text(&self) -> String {
+        match &self.kind {
+            FlutterLogKind::AppProgress { message, finished, .. } => {
+                let icon = if *finished { "✓" } else { "⏳" };
+                format!("{} {}", icon, message)
+            }
+            FlutterLogKind::AppLog { message, error } => {
+                let icon = if *error { "✗" } else { "│" };
+                format!("{} {}", icon, strip_ansi(message))
+            }
+            FlutterLogKind::AppStarted => "✓ App started".to_string(),
+            FlutterLogKind::AppDebugPort { ws_uri } => format!("🔗 Debug: {}", ws_uri),
+            FlutterLogKind::DaemonConnected => "✓ Flutter daemon connected".to_string(),
+            FlutterLogKind::DeviceAdded { name, platform } => format!("📱 {} ({})", name, platform),
+            FlutterLogKind::AppWebLaunchUrl { url } => format!("🌐 {}", url),
+            FlutterLogKind::Plain(text) => strip_ansi(text),
+            FlutterLogKind::MachineJson(json) => {
+                let event = json.get("event").and_then(|v| v.as_str()).unwrap_or("unknown");
+                format!("⚙ {}", event)
+            }
+        }
+    }
+}
+
+/// Strip ANSI escape codes from text
+fn strip_ansi(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                while let Some(&ch) = chars.peek() {
+                    chars.next();
+                    if ch.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }
 
 fn process_ansi_escapes(text: &str, default_color: Color) -> Vec<Span<'static>> {

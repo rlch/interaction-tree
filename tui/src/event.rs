@@ -2,6 +2,7 @@ use std::io;
 use std::time::Duration;
 
 use anyhow::Result;
+use arboard::Clipboard;
 use crossterm::event::{
     self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
     MouseEventKind,
@@ -18,6 +19,13 @@ use crate::commands::{parse_command, TuiCommand};
 use crate::ui;
 use crate::ws::client::{WsClient, WsEvent};
 use crate::ws::protocol::{IncomingMessage, OutgoingMessage, SessionSummary};
+
+/// Copy text to system clipboard
+fn copy_to_clipboard(text: &str) -> Result<()> {
+    let mut clipboard = Clipboard::new()?;
+    clipboard.set_text(text)?;
+    Ok(())
+}
 
 pub async fn run(app: &mut App) -> Result<()> {
     crossterm::terminal::enable_raw_mode()?;
@@ -138,8 +146,8 @@ async fn handle_key_event(
         Mode::Confirm(action) => handle_confirm_mode(app, key, action.clone()),
         Mode::SessionPicker => handle_session_picker_mode(app, key, ws).await?,
         Mode::InputPrompt(kind) => handle_input_prompt_mode(app, key, ws, kind.clone()).await?,
-        Mode::ActionMenu => handle_action_menu_mode(app, key, ws).await?,
         Mode::AgentChat => handle_agent_chat_mode(app, key, ws).await?,
+        Mode::ActionMenu => handle_action_menu_mode(app, key, ws).await?,
     }
 
     Ok(())
@@ -231,12 +239,31 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>)
             }
         }
         KeyCode::Char('g') => {
-            app.scroll_offset = 0;
+            if !on_tree_tab {
+                app.scroll_to_top();
+            }
         }
         KeyCode::Char('G') => {
-            let count = current_event_count(app);
-            if count > 0 {
-                app.scroll_offset = count - 1;
+            if !on_tree_tab {
+                app.scroll_to_bottom();
+            }
+        }
+        KeyCode::Char('V') => {
+            if !on_tree_tab {
+                app.toggle_visual_mode();
+            }
+        }
+        KeyCode::Char('y') => {
+            if !on_tree_tab {
+                if let Some(text) = app.yank_logs() {
+                    // Copy to clipboard
+                    if let Err(e) = copy_to_clipboard(&text) {
+                        app.push_toast(crate::app::Toast::error(format!("Failed to copy: {}", e)));
+                    } else {
+                        let line_count = text.lines().count();
+                        app.push_toast(crate::app::Toast::success(format!("{} line(s) yanked", line_count)));
+                    }
+                }
             }
         }
         KeyCode::Char('c') => {
@@ -303,7 +330,11 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>)
             }
         }
         KeyCode::Esc => {
-            app.filter = None;
+            if app.in_visual_mode() {
+                app.exit_visual_mode();
+            } else {
+                app.filter = None;
+            }
         }
         _ => {}
     }
@@ -645,11 +676,12 @@ async fn handle_agent_chat_mode(
                 
                 // Send to daemon (daemon manages session/conversation internally)
                 if let Some(client) = ws {
-                    let msg = OutgoingMessage::AgentMessage {
+                    let msg = OutgoingMessage::Command {
                         id: Uuid::new_v4().to_string(),
                         client_id: client.client_id().to_string(),
-                        intent: text,
-                        answer: None,
+                        action: "agent_message".to_string(),
+                        key: None,
+                        data: Some(serde_json::json!({ "intent": text })),
                     };
                     let _ = client.send(msg).await;
                     app.session.pending_response = true;
@@ -871,11 +903,16 @@ async fn execute_command(app: &mut App, input: &str, ws: &Option<WsClient>) -> R
         }
         TuiCommand::Agent { intent, answer } => {
             if let Some(client) = ws {
-                let msg = OutgoingMessage::AgentMessage {
+                let mut data = serde_json::json!({ "intent": intent });
+                if let Some(ans) = answer {
+                    data["answer"] = serde_json::Value::String(ans);
+                }
+                let msg = OutgoingMessage::Command {
                     id: Uuid::new_v4().to_string(),
                     client_id: client.client_id().to_string(),
-                    intent,
-                    answer,
+                    action: "agent_message".to_string(),
+                    key: None,
+                    data: Some(data),
                 };
                 app.session.pending_response = true;
                 let _ = client.send(msg).await;
