@@ -260,6 +260,8 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>)
         KeyCode::Char('j') | KeyCode::Down => {
             if on_tree_tab {
                 app.tree_down();
+            } else if app.content_tab == ContentTab::Agent {
+                app.chat_scroll_down();
             } else {
                 app.scroll_down();
             }
@@ -267,17 +269,27 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent, ws: &Option<WsClient>)
         KeyCode::Char('k') | KeyCode::Up => {
             if on_tree_tab {
                 app.tree_up();
+            } else if app.content_tab == ContentTab::Agent {
+                app.chat_scroll_up();
             } else {
                 app.scroll_up();
             }
         }
         KeyCode::Char('g') => {
-            if !on_tree_tab {
+            if on_tree_tab {
+                // no-op for tree
+            } else if app.content_tab == ContentTab::Agent {
+                app.chat_scroll_to_top();
+            } else {
                 app.scroll_to_top();
             }
         }
         KeyCode::Char('G') => {
-            if !on_tree_tab {
+            if on_tree_tab {
+                // no-op for tree
+            } else if app.content_tab == ContentTab::Agent {
+                app.chat_scroll_to_bottom();
+            } else {
                 app.scroll_to_bottom();
             }
         }
