@@ -48,6 +48,18 @@ export class DaemonServer {
   registerSessionService(sessionId: string, service: SessionService): void {
     this.sessionServices.set(sessionId, service);
     log.ws.debug({ sessionId }, 'Registered session service');
+
+    // Listen for interaction events and broadcast them
+    service.on('interaction', (data: {
+      sessionId: string;
+      nodeId: string;
+      interaction: string;
+      args?: Record<string, unknown>;
+      success: boolean;
+      error?: string;
+    }) => {
+      this.broadcastEvent('interaction', 'interaction.executed', data, data.sessionId);
+    });
   }
 
   unregisterSessionService(sessionId: string): void {

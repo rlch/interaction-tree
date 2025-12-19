@@ -55,12 +55,20 @@ export class SessionService extends EventEmitter {
     async execute(nodeId, interaction, args) {
         const client = this.requireVmConnection();
         const result = await client.execute(nodeId, interaction, args);
-        console.error(`[service.execute] result.tree exists: ${!!result.tree}, tree length: ${result.tree?.length ?? 0}`);
         // Update cache from the returned tree (source of truth after settle)
         if (result.tree) {
             this.treeCache = result.tree;
             this.treeCacheTime = Date.now();
         }
+        // Emit interaction event for monitoring
+        this.emit('interaction', {
+            sessionId: this.sessionId,
+            nodeId,
+            interaction,
+            args,
+            success: result.success,
+            error: result.error,
+        });
         return result;
     }
     async getState(nodeId) {
@@ -78,30 +86,16 @@ export class SessionService extends EventEmitter {
         return result;
     }
     async hotReload(clearErrors = false) {
-        // Use stdin 'r' key - more reliable than VM service extensions
-        const success = this.processManager.hotReload(this.sessionId);
-        if (!success) {
-            return { success: false, error: 'No running process to reload' };
-        }
-        // Invalidate cache - hot reload changes the tree
+        const client = this.requireVmConnection();
+        // Invalidate cache - hot reload changes the tree but doesn't return it
         this.invalidateTreeCache();
-        if (clearErrors && this.vmClient?.isConnected) {
-            this.vmClient.clearRuntimeErrors();
-        }
-        return { success: true, reloadedAt: new Date().toISOString() };
+        return client.hotReload(clearErrors);
     }
     async hotRestart(clearErrors = true) {
-        // Use stdin 'R' key - more reliable than VM service extensions
-        const success = this.processManager.hotRestart(this.sessionId);
-        if (!success) {
-            return { success: false, error: 'No running process to restart' };
-        }
-        // Invalidate cache - hot restart changes the tree
+        const client = this.requireVmConnection();
+        // Invalidate cache - hot restart changes the tree but doesn't return it
         this.invalidateTreeCache();
-        if (clearErrors && this.vmClient?.isConnected) {
-            this.vmClient.clearRuntimeErrors();
-        }
-        return { success: true, restartedAt: new Date().toISOString() };
+        return client.hotRestart(clearErrors);
     }
     async getRuntimeErrors() {
         const client = this.requireVmConnection();
