@@ -150,7 +150,9 @@ export class DaemonServer {
                             }));
                         }
                     }
-                    sendResponse({ success: true, data: { session } });
+                    // Send chat history to the connecting client
+                    const chatHistory = this.sessionManager.getChatHistory(sessionId);
+                    sendResponse({ success: true, data: { session, chatHistory } });
                     break;
                 }
                 case 'disconnect_session': {
@@ -329,10 +331,50 @@ export class DaemonServer {
                     }
                     const { intent } = data;
                     log.agent.info({ sessionId, intent }, 'Processing agent intent');
+                    // Store user message in chat history
+                    this.sessionManager.addChatMessage(sessionId, {
+                        role: 'user',
+                        content: { type: 'text', text: intent },
+                        timestamp: new Date().toISOString(),
+                    });
                     const vmClient = this.vmClients.get(sessionId);
                     log.agent.debug({ hasVmClient: !!vmClient }, 'VM client status');
+                    // Track text and tool calls for chat history
+                    let textBuffer = '';
+                    const pendingToolCalls = new Map();
                     const onEvent = (partialEvent) => {
                         log.agent.trace({ event: partialEvent.event }, 'Agent event');
+                        const evt = partialEvent.event;
+                        // Track text for chat history
+                        if (evt.kind === 'text_delta') {
+                            textBuffer += evt.text;
+                        }
+                        // Track tool calls for chat history
+                        if (evt.kind === 'tool_call_start') {
+                            pendingToolCalls.set(evt.toolCallId, {
+                                name: evt.toolName,
+                                args: {},
+                                timestamp: new Date().toISOString(),
+                            });
+                        }
+                        if (evt.kind === 'tool_call_end') {
+                            const pending = pendingToolCalls.get(evt.toolCallId);
+                            if (pending) {
+                                // Store completed tool call in chat history
+                                this.sessionManager.addChatMessage(sessionId, {
+                                    role: 'assistant',
+                                    content: {
+                                        type: 'tool_call',
+                                        name: pending.name,
+                                        args: pending.args,
+                                        output: evt.result,
+                                        status: 'success',
+                                    },
+                                    timestamp: pending.timestamp,
+                                });
+                                pendingToolCalls.delete(evt.toolCallId);
+                            }
+                        }
                         const streamEvent = {
                             type: 'agent_stream',
                             id,
@@ -353,6 +395,14 @@ export class DaemonServer {
                             onEvent,
                         });
                         log.agent.info({ sessionId, status: result.status }, 'Agent execute completed');
+                        // Store final assistant text response if any
+                        if (textBuffer.trim() || result.summary) {
+                            this.sessionManager.addChatMessage(sessionId, {
+                                role: 'assistant',
+                                content: { type: 'text', text: textBuffer.trim() || result.summary || '' },
+                                timestamp: new Date().toISOString(),
+                            });
+                        }
                         const response = {
                             type: 'agent_response',
                             id,
