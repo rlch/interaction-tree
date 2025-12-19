@@ -33,7 +33,7 @@ export class SessionManager extends EventEmitter {
       connectedClients: new Set(),
       createdAt: now,
       lastActiveAt: now,
-      agent: new AgentExecutor(),  // Create agent for this session
+      agent: new AgentExecutor({ model: 'claude-haiku-4-20250514' }),  // Create agent for this session
       logs: [],  // Session-level logs persist across reconnects
     };
 

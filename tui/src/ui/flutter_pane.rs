@@ -56,38 +56,21 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         .skip(visible_start)
         .take(inner_height)
         .map(|(idx, e)| {
-            let mut line = e.to_line();
+            let line = e.to_line();
 
-            // Highlight cursor line
+            // Highlight cursor line (style on Line fills full width)
             if idx == cursor {
                 let bg_color = if mode == LogViewMode::Visual && is_selected(idx) {
                     t.selection_bg
                 } else {
                     t.cursor_bg
                 };
-                line = Line::from(
-                    line.spans
-                        .into_iter()
-                        .map(|mut span| {
-                            span.style = span.style.bg(bg_color);
-                            span
-                        })
-                        .collect::<Vec<_>>(),
-                );
+                line.style(Style::default().bg(bg_color))
             } else if is_selected(idx) {
-                // Highlight selected lines in visual mode
-                line = Line::from(
-                    line.spans
-                        .into_iter()
-                        .map(|mut span| {
-                            span.style = span.style.bg(t.selection_bg);
-                            span
-                        })
-                        .collect::<Vec<_>>(),
-                );
+                line.style(Style::default().bg(t.selection_bg))
+            } else {
+                line
             }
-
-            line
         })
         .collect();
 
