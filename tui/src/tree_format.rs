@@ -12,7 +12,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::app::TreeNode;
+use crate::app::{TreeNode, Capability, Action};
 
 /// A schema describes a unique InteractionKey definition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,8 +36,8 @@ impl Schema {
             id: node.id.clone(),
             description: None,
             widget_type: node.widget_type.clone(),
-            capabilities: node.capabilities.iter().map(|c| c.capability_type.clone()).collect(),
-            actions: node.actions.iter().map(|a| a.name.clone()).collect(),
+            capabilities: Vec::new(),
+            actions: Vec::new(),
         }
     }
 }
@@ -477,8 +477,6 @@ mod tests {
         TreeNode {
             id: id.to_string(),
             widget_type: None,
-            capabilities: Vec::new(),
-            actions: Vec::new(),
             children,
         }
     }
@@ -487,8 +485,6 @@ mod tests {
         TreeNode {
             id: id.to_string(),
             widget_type: Some(widget_type.to_string()),
-            capabilities: Vec::new(),
-            actions: Vec::new(),
             children,
         }
     }
